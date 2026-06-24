@@ -1,0 +1,130 @@
+=== DATASET AUDIT REPORT ===
+Dataset root: /Users/sarahoualli/Desktop/BIO/iris_twins_project/data/raw/CASIA-Iris-Twins
+Famiglie attese: 100
+Famiglie trovate: 100
+Immagini totali trovate: 3183
+
+=== Conteggio per family_id ===
+family_id
+00    35
+01    27
+02    24
+03    39
+04    34
+05    19
+06    32
+07    40
+08    21
+09    29
+10    40
+11    28
+12    25
+13    34
+14    32
+15    22
+16    29
+17    39
+18    28
+19    40
+20    23
+21    35
+22    39
+23    23
+24    38
+25    20
+26    38
+27    26
+28    29
+29    31
+30    34
+31    17
+32    40
+33    38
+34    38
+35    40
+36    28
+37    39
+38    28
+39    22
+40    30
+41    21
+42    37
+43    24
+44    40
+45    35
+46    22
+47    18
+48    34
+49    36
+50    24
+51    40
+52    25
+53    34
+54    15
+55    36
+56    33
+57    40
+58    34
+59    33
+60    40
+61    28
+62    37
+63    40
+64    28
+65    38
+66    22
+67    39
+68    32
+69    24
+70    31
+71    31
+72    33
+73    25
+74    23
+75    40
+76    26
+77    30
+78    35
+79    39
+80    26
+81    40
+82    38
+83    27
+84    35
+85    28
+86    39
+87    35
+88    32
+89    37
+90    38
+91    39
+92    36
+93    40
+94    37
+95    40
+96    18
+97    37
+98    37
+99    29
+
+=== Conteggio per sottoclasse 1L/1R/2L/2R ===
+folder_class
+1L    742
+1R    831
+2L    767
+2R    843
+
+=== Immagini non leggibili ===
+0
+
+=== Filename non conformi allo schema CASIA ===
+0
+
+=== Incoerenze cartella/nome file ===
+0
+
+=== Duplicati esatti, stesso hash ===
+4
+
+=== Warnings ===
+Nessun warning strutturale.

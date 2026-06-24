@@ -1,0 +1,32 @@
+=== STRICT SUBSETS SUMMARY ===
+
+Input strict immagini: 1610
+Input strict famiglie: 96
+Input strict soggetti: 182
+Input strict iridi:    332
+
+=== Subset MIN2 ===
+Immagini: 1562
+Famiglie: 92
+Soggetti: 166
+Iridi:    284
+
+Distribuzione folder_class MIN2:
+folder_class
+1L    344
+1R    417
+2L    386
+2R    415
+
+=== Subset COMPLETE FAMILIES ===
+Immagini: 1238
+Famiglie: 60
+Soggetti: 120
+Iridi:    240
+
+Distribuzione folder_class COMPLETE:
+folder_class
+1L    276
+1R    344
+2L    294
+2R    324

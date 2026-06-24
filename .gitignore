@@ -1,0 +1,18 @@
+# Cartelle pesanti da NON caricare
+data/raw/
+data/segmentation/
+data/segmentation_v2/
+data/normalized/
+data/features/
+
+# File grandi/compressi/documenti
+*.zip
+*.pdf
+
+# Python/Mac
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
+data/segmentation_daugman/

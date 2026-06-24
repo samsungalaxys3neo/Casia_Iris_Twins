@@ -1,0 +1,204 @@
+{
+  "input_matching_file": "/Users/sarahoualli/Desktop/BIO/iris_twins_project/data/matching/daugman_strict_v3/matching_results.csv.gz",
+  "n_match_ok": 63389,
+  "relation_stats": [
+    {
+      "relation": "genuine",
+      "n": 3984,
+      "min": 0.1146124790151091,
+      "q1": 0.2626479454206952,
+      "median": 0.30877312740818463,
+      "mean": 0.3097767703443742,
+      "q3": 0.357589962471484,
+      "max": 0.5154566996984059,
+      "std": 0.06907365009502708
+    },
+    {
+      "relation": "same_subject_different_eye",
+      "n": 3295,
+      "min": 0.3336895195759959,
+      "q1": 0.411805585685288,
+      "median": 0.4290045248868778,
+      "mean": 0.4301452493282074,
+      "q3": 0.4471752763944389,
+      "max": 0.5179208106586601,
+      "std": 0.026129809092183563
+    },
+    {
+      "relation": "twin_same_eye",
+      "n": 3102,
+      "min": 0.3274374460742019,
+      "q1": 0.411767943324168,
+      "median": 0.4275519627189406,
+      "mean": 0.42760663655704567,
+      "q3": 0.44348889849428796,
+      "max": 0.5253126861226921,
+      "std": 0.025049298387010685
+    },
+    {
+      "relation": "twin_cross_eye",
+      "n": 3008,
+      "min": 0.3398148148148148,
+      "q1": 0.4170003412287079,
+      "median": 0.434429080064186,
+      "mean": 0.4331350409833614,
+      "q3": 0.4496429316450372,
+      "max": 0.5148257968865827,
+      "std": 0.02480630941287365
+    },
+    {
+      "relation": "unrelated",
+      "n": 50000,
+      "min": 0.3405405405405405,
+      "q1": 0.4326988410314581,
+      "median": 0.44903224843353506,
+      "mean": 0.4492310739697705,
+      "q3": 0.46543742339955796,
+      "max": 0.5635219548043359,
+      "std": 0.024235757436063633
+    }
+  ],
+  "verification_summary": {
+    "all_impostor": {
+      "impostor_set": "all_impostor",
+      "n_genuine": 3984,
+      "n_impostor": 59405,
+      "EER": 0.08169921711929783,
+      "EER_threshold": 0.41100000000000003,
+      "FAR_at_EER": 0.08081811295345509,
+      "FRR_at_EER": 0.08258032128514056,
+      "AUC": 0.9692811203571967
+    },
+    "unrelated": {
+      "impostor_set": "unrelated",
+      "n_genuine": 3984,
+      "n_impostor": 50000,
+      "EER": 0.0755230923694779,
+      "EER_threshold": 0.41500000000000004,
+      "FAR_at_EER": 0.077,
+      "FRR_at_EER": 0.07404618473895583,
+      "AUC": 0.9735167319277107
+    },
+    "twin_same_eye": {
+      "impostor_set": "twin_same_eye",
+      "n_genuine": 3984,
+      "n_impostor": 3102,
+      "EER": 0.11392960623927043,
+      "EER_threshold": 0.398,
+      "FAR_at_EER": 0.1154094132817537,
+      "FRR_at_EER": 0.11244979919678715,
+      "AUC": 0.9424779631096921
+    },
+    "twin_cross_eye": {
+      "impostor_set": "twin_cross_eye",
+      "n_genuine": 3984,
+      "n_impostor": 3008,
+      "EER": 0.10414864244210886,
+      "EER_threshold": 0.402,
+      "FAR_at_EER": 0.10538563829787234,
+      "FRR_at_EER": 0.10291164658634538,
+      "AUC": 0.9517748103451038
+    },
+    "same_subject_different_eye": {
+      "impostor_set": "same_subject_different_eye",
+      "n_genuine": 3984,
+      "n_impostor": 3295,
+      "EER": 0.1067469041568398,
+      "EER_threshold": 0.399,
+      "FAR_at_EER": 0.10531107738998483,
+      "FRR_at_EER": 0.10818273092369478,
+      "AUC": 0.9459314877110869
+    }
+  },
+  "statistical_tests": {
+    "genuine_vs_unrelated": {
+      "a": "genuine",
+      "b": "unrelated",
+      "n_a": 3984,
+      "n_b": 50000,
+      "mean_a": 0.3097767703443742,
+      "mean_b": 0.4492310739697705,
+      "median_a": 0.30877312740818463,
+      "median_b": 0.44903224843353506,
+      "mean_difference_a_minus_b": -0.13945430362539635,
+      "cohen_d_a_minus_b": -4.658662909935814,
+      "ks_statistic": 0.8762313253012048,
+      "ks_pvalue": 0.0,
+      "mannwhitney_u_statistic": 5275543.5,
+      "mannwhitney_pvalue": 0.0
+    },
+    "twin_same_eye_vs_unrelated": {
+      "a": "twin_same_eye",
+      "b": "unrelated",
+      "n_a": 3102,
+      "n_b": 50000,
+      "mean_a": 0.42760663655704567,
+      "mean_b": 0.4492310739697705,
+      "median_a": 0.4275519627189406,
+      "median_b": 0.44903224843353506,
+      "mean_difference_a_minus_b": -0.02162443741272485,
+      "cohen_d_a_minus_b": -0.8904802462222965,
+      "ks_statistic": 0.3488819213410703,
+      "ks_pvalue": 2.86137e-318,
+      "mannwhitney_u_statistic": 41239600.5,
+      "mannwhitney_pvalue": 0.0
+    },
+    "twin_cross_eye_vs_unrelated": {
+      "a": "twin_cross_eye",
+      "b": "unrelated",
+      "n_a": 3008,
+      "n_b": 50000,
+      "mean_a": 0.4331350409833614,
+      "mean_b": 0.4492310739697705,
+      "median_a": 0.434429080064186,
+      "median_b": 0.44903224843353506,
+      "mean_difference_a_minus_b": -0.016096032986409103,
+      "cohen_d_a_minus_b": -0.6632484078346405,
+      "ks_statistic": 0.2498677659574468,
+      "ks_pvalue": 1.520847485956776e-156,
+      "mannwhitney_u_statistic": 48802949.5,
+      "mannwhitney_pvalue": 4.427431816024363e-230
+    },
+    "same_subject_different_eye_vs_unrelated": {
+      "a": "same_subject_different_eye",
+      "b": "unrelated",
+      "n_a": 3295,
+      "n_b": 50000,
+      "mean_a": 0.4301452493282074,
+      "mean_b": 0.4492310739697705,
+      "median_a": 0.4290045248868778,
+      "median_b": 0.44903224843353506,
+      "mean_difference_a_minus_b": -0.01908582464156311,
+      "cohen_d_a_minus_b": -0.783583681588096,
+      "ks_statistic": 0.3097518361153262,
+      "ks_pvalue": 6.873714017460674e-264,
+      "mannwhitney_u_statistic": 48074891.0,
+      "mannwhitney_pvalue": 0.0
+    },
+    "twin_same_eye_vs_twin_cross_eye": {
+      "a": "twin_same_eye",
+      "b": "twin_cross_eye",
+      "n_a": 3102,
+      "n_b": 3008,
+      "mean_a": 0.42760663655704567,
+      "mean_b": 0.4331350409833614,
+      "median_a": 0.4275519627189406,
+      "median_b": 0.434429080064186,
+      "mean_difference_a_minus_b": -0.005528404426315747,
+      "cohen_d_a_minus_b": -0.22175736700838858,
+      "ks_statistic": 0.11934840425531915,
+      "ks_pvalue": 2.0799816452786285e-19,
+      "mannwhitney_u_statistic": 4035601.5,
+      "mannwhitney_pvalue": 6.448611379300356e-20
+    }
+  },
+  "plots": {
+    "hist_genuine_vs_unrelated": "/Users/sarahoualli/Desktop/BIO/iris_twins_project/data/analysis/daugman_strict_v3/plots/hist_genuine_vs_unrelated.png",
+    "hist_genuine_twin_unrelated": "/Users/sarahoualli/Desktop/BIO/iris_twins_project/data/analysis/daugman_strict_v3/plots/hist_genuine_twin_unrelated.png",
+    "boxplot_by_relation": "/Users/sarahoualli/Desktop/BIO/iris_twins_project/data/analysis/daugman_strict_v3/plots/boxplot_by_relation.png",
+    "qq_twin_same_eye_vs_unrelated": "/Users/sarahoualli/Desktop/BIO/iris_twins_project/data/analysis/daugman_strict_v3/plots/qq_twin_same_eye_vs_unrelated.png",
+    "qq_twin_cross_eye_vs_unrelated": "/Users/sarahoualli/Desktop/BIO/iris_twins_project/data/analysis/daugman_strict_v3/plots/qq_twin_cross_eye_vs_unrelated.png",
+    "roc_curves": "/Users/sarahoualli/Desktop/BIO/iris_twins_project/data/analysis/daugman_strict_v3/plots/roc_curves.png",
+    "det_curves": "/Users/sarahoualli/Desktop/BIO/iris_twins_project/data/analysis/daugman_strict_v3/plots/det_curves.png"
+  }
+}
