@@ -10,6 +10,33 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 EXPECTED_FAMILIES = {f"{i:02d}" for i in range(100)}
 EXPECTED_SUBFOLDERS = {"1L", "1R", "2L", "2R"}
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+DEFAULT_DATASET_ROOT = PROJECT_ROOT / "data" / "raw" / "CASIA-Iris-Twins"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "metadata"
+
+# funzioni per il path, in modo da non dipendere dalla cwd del terminale, ma sempre dalla root del progetto 
+def resolve_from_project(path: Path) -> Path:
+    """
+    Resolve a path. If it is relative, interpret it relative to the project root,
+    not relative to the terminal current working directory.
+    """
+    path = Path(path).expanduser()
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def project_display_path(path: Path) -> str:
+    """
+    Return a clean path for reports/prints.
+    If possible, show it relative to the project root.
+    """
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return "<external_dataset_root>"
+
 # Esempio nome atteso CASIA Twins: S3XXYENN.jpg
 # XX = family, Y = twin_id, E = L/R, NN = image index
 CASIA_TWINS_RE = re.compile(
@@ -169,7 +196,6 @@ def build_metadata(root: Path, output_dir: Path) -> pd.DataFrame:
 
                     "filename": img_path.name,
                     "relative_path": str(img_path.relative_to(root)),
-                    "absolute_path": str(img_path.resolve()),
 
                     "file_extension": img_path.suffix.lower(),
                     "file_size_bytes": file_size,
@@ -263,7 +289,7 @@ def main():
     parser.add_argument(
         "--output",
         type=str,
-        default="iris_twins_project/data/metadata",
+        default=PROJECT_ROOT / "data" / "metadata",
         help="Cartella dove salvare metadata.csv e audit_report.txt"
     )
 

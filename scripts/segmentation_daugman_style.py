@@ -12,22 +12,68 @@ from PIL import Image, ImageDraw, ImageFont
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_METADATA = PROJECT_ROOT / "data/metadata/metadata_final.csv"
-FALLBACK_METADATA = PROJECT_ROOT / "data/metadata/metadata_clean.csv"
-
-OUTPUT_DIR = PROJECT_ROOT / "data/segmentation_daugman"
-OVERLAY_DIR = OUTPUT_DIR / "overlays"
-CONTACT_DIR = OUTPUT_DIR / "contact_sheets"
-REPORT_PATH = OUTPUT_DIR / "segmentation_daugman_report.csv"
-SUMMARY_PATH = OUTPUT_DIR / "segmentation_daugman_summary.json"
+DEFAULT_METADATA_PATH = PROJECT_ROOT / "data" / "metadata" / "metadata_clean.csv"
+DEFAULT_DATASET_ROOT = PROJECT_ROOT / "data" / "raw" / "CASIA-Iris-Twins"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "segmentation_daugman"
 
 THUMB_SIZE = (180, 135)
 LABEL_HEIGHT = 42
 CONTACT_COLS = 5
 
 
+def resolve_from_project(path: Path) -> Path:
+    path = Path(path).expanduser()
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def project_display_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return "<external_path>"
+
+
+def read_metadata(metadata_path: Path) -> pd.DataFrame:
+    dtype_map = {
+        "family_id": str,
+        "twin_id": str,
+        "eye": str,
+        "subject_id": str,
+        "iris_id": str,
+        "image_idx": str,
+        "filename": str,
+        "relative_path": str,
+        "project_relative_path": str,
+        "sha256": str,
+    }
+    return pd.read_csv(metadata_path, dtype=dtype_map)
+
+
+def get_image_path(row: pd.Series, dataset_root: Path) -> Path:
+    relative_path = row.get("relative_path", None)
+
+    if pd.notna(relative_path) and str(relative_path).strip():
+        image_path = dataset_root / str(relative_path)
+        if image_path.exists():
+            return image_path
+
+    project_relative_path = row.get("project_relative_path", None)
+
+    if pd.notna(project_relative_path) and str(project_relative_path).strip():
+        image_path = PROJECT_ROOT / str(project_relative_path)
+        if image_path.exists():
+            return image_path
+
+    if pd.notna(relative_path) and str(relative_path).strip():
+        return dataset_root / str(relative_path)
+
+    raise ValueError("No relative_path or project_relative_path available for this row.")
+
+
 def safe_overlay_name(relative_path: str) -> str:
-    return relative_path.replace("/", "__").replace("\\", "__") + ".png"
+    return str(relative_path).replace("/", "__").replace("\\", "__") + ".png"
 
 
 def preprocess(gray):
@@ -66,8 +112,10 @@ def sample_circle_mean(img, cx, cy, r, angles):
 
 def circular_profile(img, cx, cy, radii, angles):
     values = []
+
     for r in radii:
         values.append(sample_circle_mean(img, cx, cy, r, angles))
+
     values = np.array(values, dtype=np.float32)
 
     if np.isnan(values).all():
@@ -78,13 +126,21 @@ def circular_profile(img, cx, cy, radii, angles):
         values[~valid] = np.interp(
             np.flatnonzero(~valid),
             np.flatnonzero(valid),
-            values[valid]
+            values[valid],
         )
 
     return values
 
 
-def best_radius_by_daugman_operator(img, cx, cy, radii, angles, sigma=1.5, positive_only=True):
+def best_radius_by_daugman_operator(
+    img,
+    cx,
+    cy,
+    radii,
+    angles,
+    sigma=1.5,
+    positive_only=True,
+):
     """
     Versione semplificata dell'idea di Daugman:
     per ogni raggio calcoliamo la media lungo la circonferenza;
@@ -103,7 +159,6 @@ def best_radius_by_daugman_operator(img, cx, cy, radii, angles, sigma=1.5, posit
     else:
         score_curve = np.abs(derivative)
 
-    # Evitiamo bordi della lista dei raggi
     if len(score_curve) > 6:
         score_curve[:3] = -np.inf
         score_curve[-3:] = -np.inf
@@ -129,8 +184,10 @@ def circle_mask(shape, cx, cy, r):
 def mean_inside_circle(gray, cx, cy, r):
     mask = circle_mask(gray.shape, cx, cy, r)
     values = gray[mask > 0]
+
     if len(values) == 0:
         return np.nan
+
     return float(values.mean())
 
 
@@ -139,8 +196,10 @@ def mean_in_ring(gray, cx, cy, r1, r2):
     inner = circle_mask(gray.shape, cx, cy, r1)
     ring = (outer > 0) & (inner == 0)
     values = gray[ring]
+
     if len(values) == 0:
         return np.nan
+
     return float(values.mean())
 
 
@@ -159,6 +218,7 @@ def find_initial_pupil(gray, enhanced):
         thr = min(max(thr, 15), 90)
 
         dark = (enhanced <= thr).astype(np.uint8) * 255
+
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, kernel)
         dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, kernel)
@@ -195,7 +255,13 @@ def find_initial_pupil(gray, enhanced):
             contrast = max(ring - inner, 0)
             center_penalty = 15 * (abs(cx - w / 2) / w + abs(cy - h / 2) / h)
 
-            score = darkness + 2.0 * contrast + 20 * circularity + 10 * fill_ratio - center_penalty
+            score = (
+                darkness
+                + 2.0 * contrast
+                + 20 * circularity
+                + 10 * fill_ratio
+                - center_penalty
+            )
 
             candidates.append({
                 "x": float(cx),
@@ -205,7 +271,6 @@ def find_initial_pupil(gray, enhanced):
                 "method": f"dark_components_p{p}",
             })
 
-    # fallback Hough
     circles = cv2.HoughCircles(
         enhanced,
         cv2.HOUGH_GRADIENT,
@@ -253,8 +318,6 @@ def refine_pupil_daugman(gray, enhanced, init):
     cx0, cy0, r0 = init["x"], init["y"], init["r"]
 
     best = None
-
-    # Ricerca locale del centro
     offsets = [-8, -4, 0, 4, 8]
 
     min_r = int(max(10, r0 - 18))
@@ -274,7 +337,7 @@ def refine_pupil_daugman(gray, enhanced, init):
                 radii,
                 full_angles,
                 sigma=1.3,
-                positive_only=True
+                positive_only=True,
             )
 
             if result is None:
@@ -291,7 +354,6 @@ def refine_pupil_daugman(gray, enhanced, init):
             darkness = 255 - inner
             contrast = max(ring - inner, 0)
 
-            # score combinato: derivata + aspetto fotometrico
             combined_score = (
                 3.0 * result["score"]
                 + 0.25 * darkness
@@ -343,8 +405,6 @@ def find_iris_daugman(gray, enhanced, pupil):
     radii = np.arange(min_r, max_r + 1, 2)
 
     best = None
-
-    # Il centro dell'iride può essere spostato rispetto alla pupilla.
     offsets = [-20, -12, -6, 0, 6, 12, 20]
 
     for dx in offsets:
@@ -359,7 +419,7 @@ def find_iris_daugman(gray, enhanced, pupil):
                 radii,
                 angles,
                 sigma=2.0,
-                positive_only=True
+                positive_only=True,
             )
 
             if result is None:
@@ -386,7 +446,6 @@ def find_iris_daugman(gray, enhanced, pupil):
 
             contrast = outside - inside
 
-            # Penalizziamo rapporti e offset troppo strani.
             ratio_penalty = 2.0 * abs(ratio - 2.55)
             offset_penalty = 0.12 * center_offset
 
@@ -425,7 +484,7 @@ def find_iris_daugman(gray, enhanced, pupil):
     return best
 
 
-def segment_one(image_path):
+def segment_one(image_path: Path):
     gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
 
     if gray is None:
@@ -433,7 +492,7 @@ def segment_one(image_path):
             "segmentation_ok": False,
             "pupil_found": False,
             "iris_found": False,
-            "error": "cv2.imread failed",
+            "error": f"cv2.imread failed: {image_path}",
         }, None
 
     enhanced = preprocess(gray)
@@ -534,7 +593,10 @@ def draw_overlay(gray, result, label):
     conf = result.get("iris_confidence", "none")
     ratio = result.get("iris_pupil_radius_ratio", np.nan)
 
-    text = f"{status} | conf={conf} | ratio={ratio:.2f} | {label}" if not np.isnan(ratio) else f"{status} | conf={conf} | {label}"
+    if not np.isnan(ratio):
+        text = f"{status} | conf={conf} | ratio={ratio:.2f} | {label}"
+    else:
+        text = f"{status} | conf={conf} | {label}"
 
     cv2.rectangle(rgb, (0, 0), (rgb.shape[1], 30), (255, 255, 255), -1)
     cv2.putText(
@@ -592,48 +654,59 @@ def save_contact_sheet(paths, title, output_path):
         y = y0 + (i // CONTACT_COLS) * (THUMB_SIZE[1] + LABEL_HEIGHT)
         sheet.paste(thumb, (x, y))
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(output_path)
 
 
-def load_metadata(path=None):
-    if path is not None:
-        metadata_path = Path(path)
-    else:
-        metadata_path = DEFAULT_METADATA if DEFAULT_METADATA.exists() else FALLBACK_METADATA
+def summarize_numeric_column(df: pd.DataFrame, col: str):
+    if col not in df.columns:
+        return None
 
-    df = pd.read_csv(
-        metadata_path,
-        dtype={
-            "family_id": str,
-            "twin_id": str,
-            "eye": str,
-            "image_idx": str,
-        },
-    )
+    values = pd.to_numeric(df[col], errors="coerce").dropna()
 
-    print(f"Uso metadata: {metadata_path}")
-    return df
+    if len(values) == 0:
+        return None
+
+    return {
+        "min": float(values.min()),
+        "median": float(values.median()),
+        "mean": float(values.mean()),
+        "max": float(values.max()),
+    }
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--metadata", type=str, default=None)
-    parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--debug-overlays", type=int, default=400)
-    args = parser.parse_args()
+def run_daugman_segmentation(
+    metadata_path: Path,
+    dataset_root: Path,
+    output_dir: Path,
+    limit,
+    debug_overlays: int,
+):
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Metadata non trovato: {metadata_path}")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    OVERLAY_DIR.mkdir(parents=True, exist_ok=True)
-    CONTACT_DIR.mkdir(parents=True, exist_ok=True)
+    if not dataset_root.exists():
+        raise FileNotFoundError(f"Dataset root non trovato: {dataset_root}")
 
-    df = load_metadata(args.metadata)
+    overlay_dir = output_dir / "overlays"
+    contact_dir = output_dir / "contact_sheets"
+    report_path = output_dir / "segmentation_daugman_report.csv"
+    summary_path = output_dir / "segmentation_daugman_summary.json"
 
-    if args.limit is not None:
-        df = df.head(args.limit).copy()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    contact_dir.mkdir(parents=True, exist_ok=True)
+
+    df = read_metadata(metadata_path)
+
+    if limit is not None:
+        df = df.head(limit).copy()
 
     print("=== DAUGMAN-STYLE SEGMENTATION ===")
+    print(f"Metadata: {project_display_path(metadata_path)}")
+    print(f"Dataset root: {project_display_path(dataset_root)}")
+    print(f"Output dir: {project_display_path(output_dir)}")
     print(f"Immagini da segmentare: {len(df)}")
-    print(f"Output: {OUTPUT_DIR}")
     print()
 
     rows = []
@@ -646,10 +719,18 @@ def main():
 
     ok_saved = 0
 
-    for idx, row in df.iterrows():
-        image_path = Path(row["absolute_path"])
-
-        result, gray = segment_one(image_path)
+    for processed_idx, (_, row) in enumerate(df.iterrows(), start=1):
+        try:
+            image_path = get_image_path(row, dataset_root)
+            result, gray = segment_one(image_path)
+        except Exception as e:
+            result = {
+                "segmentation_ok": False,
+                "pupil_found": False,
+                "iris_found": False,
+                "error": str(e),
+            }
+            gray = None
 
         out_row = row.to_dict()
         out_row.update(result)
@@ -658,33 +739,36 @@ def main():
         save_overlay = False
 
         if result.get("segmentation_ok", False):
-            if ok_saved < args.debug_overlays:
+            if ok_saved < debug_overlays:
                 save_overlay = True
                 ok_saved += 1
         else:
             save_overlay = True
 
         if gray is not None and save_overlay:
-            overlay = draw_overlay(gray, result, row["relative_path"])
-            overlay_path = OVERLAY_DIR / safe_overlay_name(row["relative_path"])
+            relative_path = str(row["relative_path"])
+            overlay = draw_overlay(gray, result, relative_path)
+            overlay_path = overlay_dir / safe_overlay_name(relative_path)
             cv2.imwrite(str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 
             if result.get("segmentation_ok", False):
                 ok_paths.append(overlay_path)
+
                 if result.get("iris_confidence") == "high":
                     high_paths.append(overlay_path)
                 elif result.get("iris_confidence") == "medium":
                     medium_paths.append(overlay_path)
             else:
                 check_paths.append(overlay_path)
+
                 if not result.get("pupil_found", False) or not result.get("iris_found", False):
                     fail_paths.append(overlay_path)
 
-        if (idx + 1) % 100 == 0:
-            print(f"Processate {idx + 1}/{len(df)} immagini")
+        if processed_idx % 100 == 0:
+            print(f"Processate {processed_idx}/{len(df)} immagini")
 
     sdf = pd.DataFrame(rows)
-    sdf.to_csv(REPORT_PATH, index=False)
+    sdf.to_csv(report_path, index=False)
 
     n = len(sdf)
     n_ok = int(sdf["segmentation_ok"].sum())
@@ -699,6 +783,9 @@ def main():
         "segmentation_ok_rate": n_ok / n if n else None,
         "pupil_found": pupil_found,
         "iris_found": iris_found,
+        "metadata_path": project_display_path(metadata_path),
+        "dataset_root": project_display_path(dataset_root),
+        "output_dir": project_display_path(output_dir),
     }
 
     if "iris_confidence" in sdf.columns:
@@ -716,17 +803,11 @@ def main():
         "iris_pupil_radius_ratio",
         "iris_center_offset",
     ]:
-        if col in sdf.columns:
-            values = pd.to_numeric(sdf[col], errors="coerce").dropna()
-            if len(values):
-                summary[col] = {
-                    "min": float(values.min()),
-                    "median": float(values.median()),
-                    "mean": float(values.mean()),
-                    "max": float(values.max()),
-                }
+        stats = summarize_numeric_column(sdf, col)
+        if stats is not None:
+            summary[col] = stats
 
-    with SUMMARY_PATH.open("w", encoding="utf-8") as f:
+    with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
     random.seed(42)
@@ -739,31 +820,31 @@ def main():
     save_contact_sheet(
         sample_paths(ok_paths, 25),
         "Daugman-style OK examples",
-        CONTACT_DIR / "daugman_ok_examples.png",
+        contact_dir / "daugman_ok_examples.png",
     )
 
     save_contact_sheet(
         sample_paths(high_paths, 25),
         "Daugman-style HIGH confidence examples",
-        CONTACT_DIR / "daugman_high_confidence_examples.png",
+        contact_dir / "daugman_high_confidence_examples.png",
     )
 
     save_contact_sheet(
         sample_paths(medium_paths, 25),
         "Daugman-style MEDIUM confidence examples",
-        CONTACT_DIR / "daugman_medium_confidence_examples.png",
+        contact_dir / "daugman_medium_confidence_examples.png",
     )
 
     save_contact_sheet(
         sample_paths(check_paths, 25),
         "Daugman-style CHECK examples",
-        CONTACT_DIR / "daugman_check_examples.png",
+        contact_dir / "daugman_check_examples.png",
     )
 
     save_contact_sheet(
         sample_paths(fail_paths, 25),
         "Daugman-style FAIL examples",
-        CONTACT_DIR / "daugman_fail_examples.png",
+        contact_dir / "daugman_fail_examples.png",
     )
 
     print()
@@ -782,6 +863,7 @@ def main():
             print(f"  {k}: {v}")
 
     print()
+
     for col in ["pupil_r", "iris_r", "iris_pupil_radius_ratio", "iris_center_offset"]:
         if col in summary:
             print(col)
@@ -789,10 +871,58 @@ def main():
                 print(f"  {k}: {v}")
             print()
 
-    print(f"Report salvato in:     {REPORT_PATH}")
-    print(f"Summary salvato in:    {SUMMARY_PATH}")
-    print(f"Overlay salvati in:    {OVERLAY_DIR}")
-    print(f"Contact sheet in:      {CONTACT_DIR}")
+    print(f"Report salvato in:     {project_display_path(report_path)}")
+    print(f"Summary salvato in:    {project_display_path(summary_path)}")
+    print(f"Overlay salvati in:    {project_display_path(overlay_dir)}")
+    print(f"Contact sheet in:      {project_display_path(contact_dir)}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--metadata",
+        type=Path,
+        default=DEFAULT_METADATA_PATH,
+        help="Path a metadata CSV. Default: data/metadata/metadata_clean.csv",
+    )
+    parser.add_argument(
+        "--dataset-root",
+        type=Path,
+        default=DEFAULT_DATASET_ROOT,
+        help="Path alla cartella CASIA-Iris-Twins. Default: data/raw/CASIA-Iris-Twins",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Cartella dove salvare i risultati. Default: data/segmentation_daugman",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Processa solo le prime N immagini",
+    )
+    parser.add_argument(
+        "--debug-overlays",
+        type=int,
+        default=400,
+        help="Numero massimo overlay OK da salvare",
+    )
+
+    args = parser.parse_args()
+
+    metadata_path = resolve_from_project(args.metadata)
+    dataset_root = resolve_from_project(args.dataset_root)
+    output_dir = resolve_from_project(args.output_dir)
+
+    run_daugman_segmentation(
+        metadata_path=metadata_path,
+        dataset_root=dataset_root,
+        output_dir=output_dir,
+        limit=args.limit,
+        debug_overlays=args.debug_overlays,
+    )
 
 
 if __name__ == "__main__":

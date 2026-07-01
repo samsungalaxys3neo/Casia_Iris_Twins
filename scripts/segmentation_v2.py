@@ -12,18 +12,64 @@ from PIL import Image, ImageDraw, ImageFont
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-METADATA_PATH = PROJECT_ROOT / "data/metadata/metadata_final.csv"
-FALLBACK_METADATA_PATH = PROJECT_ROOT / "data/metadata/metadata_clean.csv"
-
-OUTPUT_DIR = PROJECT_ROOT / "data/segmentation_v2"
-OVERLAY_DIR = OUTPUT_DIR / "overlays"
-CONTACT_DIR = OUTPUT_DIR / "contact_sheets"
-REPORT_PATH = OUTPUT_DIR / "segmentation_v2_report.csv"
-SUMMARY_PATH = OUTPUT_DIR / "segmentation_v2_summary.json"
+DEFAULT_METADATA_PATH = PROJECT_ROOT / "data" / "metadata" / "metadata_clean.csv"
+DEFAULT_DATASET_ROOT = PROJECT_ROOT / "data" / "raw" / "CASIA-Iris-Twins"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "segmentation_v2"
 
 THUMB_SIZE = (180, 135)
 LABEL_HEIGHT = 40
 CONTACT_COLS = 5
+
+
+def resolve_from_project(path: Path) -> Path:
+    path = Path(path).expanduser()
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def project_display_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return "<external_path>"
+
+
+def read_metadata(metadata_path: Path) -> pd.DataFrame:
+    dtype_map = {
+        "family_id": str,
+        "twin_id": str,
+        "eye": str,
+        "subject_id": str,
+        "iris_id": str,
+        "image_idx": str,
+        "filename": str,
+        "relative_path": str,
+        "project_relative_path": str,
+        "sha256": str,
+    }
+    return pd.read_csv(metadata_path, dtype=dtype_map)
+
+
+def get_image_path(row: pd.Series, dataset_root: Path) -> Path:
+    relative_path = row.get("relative_path", None)
+
+    if pd.notna(relative_path) and str(relative_path).strip():
+        image_path = dataset_root / str(relative_path)
+        if image_path.exists():
+            return image_path
+
+    project_relative_path = row.get("project_relative_path", None)
+
+    if pd.notna(project_relative_path) and str(project_relative_path).strip():
+        image_path = PROJECT_ROOT / str(project_relative_path)
+        if image_path.exists():
+            return image_path
+
+    if pd.notna(relative_path) and str(relative_path).strip():
+        return dataset_root / str(relative_path)
+
+    raise ValueError("No relative_path or project_relative_path available for this row.")
 
 
 def preprocess(gray):
@@ -72,14 +118,9 @@ def sample_circle_values(img, cx, cy, r, angles_rad):
 
 
 def lateral_angles():
-    # Usiamo soprattutto i lati dell'iride, perché sopra/sotto spesso ci sono palpebre.
     deg1 = np.linspace(-45, 45, 100)
     deg2 = np.linspace(135, 225, 100)
     return np.deg2rad(np.concatenate([deg1, deg2]))
-
-
-def all_angles():
-    return np.linspace(0, 2 * np.pi, 260, endpoint=False)
 
 
 def score_pupil_candidate(gray, cx, cy, r, circularity=1.0, fill_ratio=1.0):
@@ -97,11 +138,8 @@ def score_pupil_candidate(gray, cx, cy, r, circularity=1.0, fill_ratio=1.0):
     if inner_mean is None or ring_mean is None:
         return None
 
-    # La pupilla deve essere scura e il bordo/ring attorno tendenzialmente più chiaro.
     darkness_score = 255.0 - inner_mean
     contrast_score = max(ring_mean - inner_mean, 0.0)
-
-    # Penalizziamo candidati troppo lontani dal centro immagine, ma in modo leggero.
     center_penalty = 25.0 * (abs(cx - w / 2) / w + abs(cy - h / 2) / h)
 
     score = (
@@ -126,9 +164,7 @@ def score_pupil_candidate(gray, cx, cy, r, circularity=1.0, fill_ratio=1.0):
 
 def find_pupil_candidates(gray, enhanced):
     candidates = []
-    h, w = gray.shape
 
-    # Metodo 1: sogliatura sui pixel scuri + componenti connesse.
     percentiles = [2, 3, 4, 5, 6, 8, 10, 12]
 
     for p in percentiles:
@@ -176,7 +212,6 @@ def find_pupil_candidates(gray, enhanced):
                 cand["method"] = f"threshold_p{p}"
                 candidates.append(cand)
 
-    # Metodo 2: fallback HoughCircles.
     blur = cv2.GaussianBlur(enhanced, (9, 9), 1.5)
 
     circles = cv2.HoughCircles(
@@ -283,10 +318,7 @@ def iris_candidate_score(gray, grad, cx, cy, r, pupil):
     edge_score = float(np.mean(edge_vals))
     contrast = float(np.mean(outside_vals) - np.mean(inside_vals))
 
-    # Preferiamo transizione iride -> sclera: esterno più chiaro dell'interno.
     positive_contrast = max(contrast, 0.0)
-
-    # Rapporto tipico nel dataset visto dalla v1: circa 2.6-2.8.
     ratio_penalty = 4.0 * abs(ratio - 2.75)
     offset_penalty = 0.25 * center_offset
 
@@ -314,7 +346,6 @@ def find_iris(gray, enhanced, pupil):
 
     candidates = []
 
-    # Ricerca locale del centro dell'iride attorno alla pupilla.
     offsets = [-24, -16, -8, 0, 8, 16, 24]
     radius_step = 2
 
@@ -329,7 +360,6 @@ def find_iris(gray, enhanced, pupil):
                     cand["method"] = "radial_lateral_search"
                     candidates.append(cand)
 
-    # Fallback Hough per cerchi grandi.
     blur = cv2.GaussianBlur(enhanced, (9, 9), 1.5)
 
     circles = cv2.HoughCircles(
@@ -371,7 +401,7 @@ def find_iris(gray, enhanced, pupil):
     return best
 
 
-def segment_one(image_path):
+def segment_one(image_path: Path):
     gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
 
     if gray is None:
@@ -379,7 +409,7 @@ def segment_one(image_path):
             "segmentation_ok": False,
             "pupil_found": False,
             "iris_found": False,
-            "error": "cv2.imread failed",
+            "error": f"cv2.imread failed: {image_path}",
         }, None
 
     enhanced = preprocess(gray)
@@ -412,7 +442,6 @@ def segment_one(image_path):
             "error": "iris not found",
         }, gray
 
-    # Criteri di accettazione più severi rispetto alla v1.
     ok = (
         pupil["inner_mean"] <= 90
         and pupil["score"] >= 140
@@ -487,7 +516,7 @@ def draw_overlay(gray, result, label):
 
 
 def safe_overlay_name(relative_path):
-    return relative_path.replace("/", "__").replace("\\", "__") + ".png"
+    return str(relative_path).replace("/", "__").replace("\\", "__") + ".png"
 
 
 def save_contact_sheet(paths, title, output_path):
@@ -531,44 +560,59 @@ def save_contact_sheet(paths, title, output_path):
         y = y0 + (i // CONTACT_COLS) * (THUMB_SIZE[1] + LABEL_HEIGHT)
         sheet.paste(thumb, (x, y))
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(output_path)
 
 
-def load_metadata():
-    path = METADATA_PATH if METADATA_PATH.exists() else FALLBACK_METADATA_PATH
+def summarize_numeric_column(df: pd.DataFrame, col: str):
+    if col not in df.columns:
+        return None
 
-    df = pd.read_csv(
-        path,
-        dtype={
-            "family_id": str,
-            "twin_id": str,
-            "eye": str,
-            "image_idx": str,
-        },
-    )
+    values = pd.to_numeric(df[col], errors="coerce").dropna()
+    if len(values) == 0:
+        return None
 
-    print(f"Uso metadata: {path}")
-    return df
+    return {
+        "min": float(values.min()),
+        "median": float(values.median()),
+        "mean": float(values.mean()),
+        "max": float(values.max()),
+    }
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=None, help="Processa solo le prime N immagini")
-    parser.add_argument("--debug-overlays", type=int, default=400, help="Numero massimo overlay OK da salvare")
-    args = parser.parse_args()
+def run_segmentation_v2(
+    metadata_path: Path,
+    dataset_root: Path,
+    output_dir: Path,
+    limit,
+    debug_overlays: int,
+):
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Metadata non trovato: {metadata_path}")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    OVERLAY_DIR.mkdir(parents=True, exist_ok=True)
-    CONTACT_DIR.mkdir(parents=True, exist_ok=True)
+    if not dataset_root.exists():
+        raise FileNotFoundError(f"Dataset root non trovato: {dataset_root}")
 
-    df = load_metadata()
+    overlay_dir = output_dir / "overlays"
+    contact_dir = output_dir / "contact_sheets"
+    report_path = output_dir / "segmentation_v2_report.csv"
+    summary_path = output_dir / "segmentation_v2_summary.json"
 
-    if args.limit is not None:
-        df = df.head(args.limit).copy()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    contact_dir.mkdir(parents=True, exist_ok=True)
+
+    df = read_metadata(metadata_path)
+
+    if limit is not None:
+        df = df.head(limit).copy()
 
     print("=== SEGMENTATION V2 ===")
+    print(f"Metadata: {project_display_path(metadata_path)}")
+    print(f"Dataset root: {project_display_path(dataset_root)}")
+    print(f"Output dir: {project_display_path(output_dir)}")
     print(f"Immagini da segmentare: {len(df)}")
-    print(f"Output: {OUTPUT_DIR}")
+    print()
 
     rows = []
 
@@ -580,10 +624,18 @@ def main():
 
     ok_saved = 0
 
-    for idx, row in df.iterrows():
-        image_path = Path(row["absolute_path"])
-
-        result, gray = segment_one(image_path)
+    for _, row in df.iterrows():
+        try:
+            image_path = get_image_path(row, dataset_root)
+            result, gray = segment_one(image_path)
+        except Exception as e:
+            result = {
+                "segmentation_ok": False,
+                "pupil_found": False,
+                "iris_found": False,
+                "error": str(e),
+            }
+            gray = None
 
         out_row = row.to_dict()
         out_row.update(result)
@@ -592,15 +644,16 @@ def main():
         save_overlay = False
 
         if result.get("segmentation_ok", False):
-            if ok_saved < args.debug_overlays:
+            if ok_saved < debug_overlays:
                 save_overlay = True
                 ok_saved += 1
         else:
             save_overlay = True
 
         if gray is not None and save_overlay:
-            overlay = draw_overlay(gray, result, row["relative_path"])
-            overlay_path = OVERLAY_DIR / safe_overlay_name(row["relative_path"])
+            relative_path = str(row["relative_path"])
+            overlay = draw_overlay(gray, result, relative_path)
+            overlay_path = overlay_dir / safe_overlay_name(relative_path)
             cv2.imwrite(str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 
             if result.get("segmentation_ok", False):
@@ -616,11 +669,11 @@ def main():
                 if not result.get("pupil_found", False) or not result.get("iris_found", False):
                     fail_overlay_paths.append(overlay_path)
 
-        if (len(rows)) % 250 == 0:
+        if len(rows) % 250 == 0:
             print(f"Processate {len(rows)}/{len(df)} immagini")
 
     sdf = pd.DataFrame(rows)
-    sdf.to_csv(REPORT_PATH, index=False)
+    sdf.to_csv(report_path, index=False)
 
     n = len(sdf)
     n_ok = int(sdf["segmentation_ok"].sum())
@@ -635,10 +688,15 @@ def main():
         "segmentation_ok_rate": n_ok / n if n else None,
         "pupil_found": pupil_found,
         "iris_found": iris_found,
+        "metadata_path": project_display_path(metadata_path),
+        "dataset_root": project_display_path(dataset_root),
+        "output_dir": project_display_path(output_dir),
     }
 
     if "iris_confidence" in sdf.columns:
-        summary["iris_confidence_counts"] = sdf["iris_confidence"].fillna("none").value_counts().to_dict()
+        summary["iris_confidence_counts"] = (
+            sdf["iris_confidence"].fillna("none").value_counts().to_dict()
+        )
 
     for col in [
         "pupil_r",
@@ -648,17 +706,11 @@ def main():
         "iris_pupil_radius_ratio",
         "iris_center_offset",
     ]:
-        if col in sdf.columns:
-            values = pd.to_numeric(sdf[col], errors="coerce").dropna()
-            if len(values):
-                summary[col] = {
-                    "min": float(values.min()),
-                    "median": float(values.median()),
-                    "mean": float(values.mean()),
-                    "max": float(values.max()),
-                }
+        stats = summarize_numeric_column(sdf, col)
+        if stats is not None:
+            summary[col] = stats
 
-    with SUMMARY_PATH.open("w", encoding="utf-8") as f:
+    with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
     random.seed(42)
@@ -671,31 +723,31 @@ def main():
     save_contact_sheet(
         sample_paths(ok_overlay_paths, 25),
         "Segmentation V2 - OK examples",
-        CONTACT_DIR / "segmentation_v2_ok_examples.png",
+        contact_dir / "segmentation_v2_ok_examples.png",
     )
 
     save_contact_sheet(
         sample_paths(check_overlay_paths, 25),
         "Segmentation V2 - CHECK examples",
-        CONTACT_DIR / "segmentation_v2_check_examples.png",
+        contact_dir / "segmentation_v2_check_examples.png",
     )
 
     save_contact_sheet(
         sample_paths(high_overlay_paths, 25),
         "Segmentation V2 - HIGH confidence OK examples",
-        CONTACT_DIR / "segmentation_v2_high_confidence_examples.png",
+        contact_dir / "segmentation_v2_high_confidence_examples.png",
     )
 
     save_contact_sheet(
         sample_paths(medium_overlay_paths, 25),
         "Segmentation V2 - MEDIUM confidence OK examples",
-        CONTACT_DIR / "segmentation_v2_medium_confidence_examples.png",
+        contact_dir / "segmentation_v2_medium_confidence_examples.png",
     )
 
     save_contact_sheet(
         sample_paths(fail_overlay_paths, 25),
         "Segmentation V2 - FAIL examples",
-        CONTACT_DIR / "segmentation_v2_fail_examples.png",
+        contact_dir / "segmentation_v2_fail_examples.png",
     )
 
     print()
@@ -721,10 +773,58 @@ def main():
                 print(f"  {k}: {v}")
             print()
 
-    print(f"Report salvato in:     {REPORT_PATH}")
-    print(f"Summary salvato in:    {SUMMARY_PATH}")
-    print(f"Overlay salvati in:    {OVERLAY_DIR}")
-    print(f"Contact sheet in:      {CONTACT_DIR}")
+    print(f"Report salvato in:     {project_display_path(report_path)}")
+    print(f"Summary salvato in:    {project_display_path(summary_path)}")
+    print(f"Overlay salvati in:    {project_display_path(overlay_dir)}")
+    print(f"Contact sheet in:      {project_display_path(contact_dir)}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--metadata",
+        type=Path,
+        default=DEFAULT_METADATA_PATH,
+        help="Path a metadata CSV. Default: data/metadata/metadata_clean.csv",
+    )
+    parser.add_argument(
+        "--dataset-root",
+        type=Path,
+        default=DEFAULT_DATASET_ROOT,
+        help="Path alla cartella CASIA-Iris-Twins. Default: data/raw/CASIA-Iris-Twins",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Cartella dove salvare i risultati. Default: data/segmentation_v2",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Processa solo le prime N immagini",
+    )
+    parser.add_argument(
+        "--debug-overlays",
+        type=int,
+        default=400,
+        help="Numero massimo overlay OK da salvare",
+    )
+
+    args = parser.parse_args()
+
+    metadata_path = resolve_from_project(args.metadata)
+    dataset_root = resolve_from_project(args.dataset_root)
+    output_dir = resolve_from_project(args.output_dir)
+
+    run_segmentation_v2(
+        metadata_path=metadata_path,
+        dataset_root=dataset_root,
+        output_dir=output_dir,
+        limit=args.limit,
+        debug_overlays=args.debug_overlays,
+    )
 
 
 if __name__ == "__main__":

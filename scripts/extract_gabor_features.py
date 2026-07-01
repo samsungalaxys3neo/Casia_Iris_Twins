@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 import json
 import math
 
@@ -10,15 +11,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-INPUT_REPORT = PROJECT_ROOT / "data/normalized/daugman_strict_v3/normalized_daugman_strict_v3_report.csv"
-
-OUTPUT_DIR = PROJECT_ROOT / "data/features/daugman_strict_v3"
-CODES_DIR = OUTPUT_DIR / "gabor_codes"
-PREVIEW_DIR = OUTPUT_DIR / "code_previews"
-CONTACT_DIR = OUTPUT_DIR / "contact_sheets"
-
-FEATURE_REPORT = OUTPUT_DIR / "features_report.csv"
-SUMMARY_PATH = OUTPUT_DIR / "features_summary.json"
+DEFAULT_INPUT_REPORT = PROJECT_ROOT / "data" / "normalized" / "daugman_strict_v3" / "normalized_daugman_strict_v3_report.csv"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "features" / "daugman_strict_v3"
 
 THUMB_SIZE = (256, 64)
 LABEL_HEIGHT = 38
@@ -30,23 +24,73 @@ CONTACT_COLS = 3
 # Non è il codice proprietario di Daugman, ma una baseline sperimentale Gabor-based.
 GABOR_FILTERS = [
     {"name": "theta0_lambda8", "theta": 0.0, "lambda": 8.0, "sigma": 4.0, "gamma": 0.5},
-    {"name": "theta90_lambda8", "theta": np.pi / 2, "lambda": 8.0, "sigma": 4.0, "gamma": 0.5},
+    {"name": "theta90_lambda8", "theta": float(np.pi / 2), "lambda": 8.0, "sigma": 4.0, "gamma": 0.5},
     {"name": "theta0_lambda16", "theta": 0.0, "lambda": 16.0, "sigma": 6.0, "gamma": 0.5},
-    {"name": "theta90_lambda16", "theta": np.pi / 2, "lambda": 16.0, "sigma": 6.0, "gamma": 0.5},
+    {"name": "theta90_lambda16", "theta": float(np.pi / 2), "lambda": 16.0, "sigma": 6.0, "gamma": 0.5},
 ]
 
 
+def resolve_from_project(path: Path) -> Path:
+    path = Path(path).expanduser()
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def project_display_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return "<external_path>"
+
+
+def project_relative_or_absolute(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
 def safe_name(relative_path: str) -> str:
-    return relative_path.replace("/", "__").replace("\\", "__")
+    return str(relative_path).replace("/", "__").replace("\\", "__")
+
+
+def read_normalization_report(input_report: Path) -> pd.DataFrame:
+    dtype_map = {
+        "family_id": str,
+        "twin_id": str,
+        "eye": str,
+        "subject_id": str,
+        "iris_id": str,
+        "image_idx": str,
+        "filename": str,
+        "relative_path": str,
+        "project_relative_path": str,
+        "sha256": str,
+        "normalized_path": str,
+        "mask_path": str,
+        "masked_preview_path": str,
+    }
+
+    df = pd.read_csv(input_report, dtype=dtype_map)
+
+    df["normalization_ok"] = (
+        df["normalization_ok"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    )
+
+    return df
 
 
 def make_gabor_kernel(filter_cfg, ksize=21):
     kernel = cv2.getGaborKernel(
         ksize=(ksize, ksize),
-        sigma=filter_cfg["sigma"],
-        theta=filter_cfg["theta"],
-        lambd=filter_cfg["lambda"],
-        gamma=filter_cfg["gamma"],
+        sigma=float(filter_cfg["sigma"]),
+        theta=float(filter_cfg["theta"]),
+        lambd=float(filter_cfg["lambda"]),
+        gamma=float(filter_cfg["gamma"]),
         psi=0,
         ktype=cv2.CV_32F,
     )
@@ -159,6 +203,8 @@ def make_code_preview(code, code_mask, output_path):
 
 
 def make_contact_sheet(df, title, output_path, n=45):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     if len(df) == 0:
         return
 
@@ -169,7 +215,12 @@ def make_contact_sheet(df, title, output_path, n=45):
     thumbs = []
 
     for _, row in df.iterrows():
-        path = Path(row["code_preview_path"])
+        path_value = row.get("code_preview_path", None)
+
+        if pd.isna(path_value):
+            continue
+
+        path = resolve_from_project(Path(str(path_value)))
 
         if not path.exists():
             continue
@@ -211,70 +262,113 @@ def make_contact_sheet(df, title, output_path, n=45):
         sheet.paste(thumb, (x, y))
 
     sheet.save(output_path)
-    print(f"Salvata contact sheet: {output_path}")
+    print(f"Salvata contact sheet: {project_display_path(output_path)}")
 
 
-def main():
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    CODES_DIR.mkdir(parents=True, exist_ok=True)
-    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-    CONTACT_DIR.mkdir(parents=True, exist_ok=True)
+def summarize_values(series: pd.Series) -> dict:
+    values = pd.to_numeric(series, errors="coerce").dropna()
 
-    df = pd.read_csv(
-        INPUT_REPORT,
-        dtype={
-            "family_id": str,
-            "twin_id": str,
-            "eye": str,
-            "image_idx": str,
+    if len(values) == 0:
+        return {
+            "min": None,
+            "q1": None,
+            "median": None,
+            "mean": None,
+            "q3": None,
+            "max": None,
         }
-    )
+
+    return {
+        "min": float(values.min()),
+        "q1": float(values.quantile(0.25)),
+        "median": float(values.median()),
+        "mean": float(values.mean()),
+        "q3": float(values.quantile(0.75)),
+        "max": float(values.max()),
+    }
+
+
+def filters_for_json():
+    clean_filters = []
+
+    for cfg in GABOR_FILTERS:
+        clean_filters.append(
+            {
+                "name": str(cfg["name"]),
+                "theta": float(cfg["theta"]),
+                "lambda": float(cfg["lambda"]),
+                "sigma": float(cfg["sigma"]),
+                "gamma": float(cfg["gamma"]),
+            }
+        )
+
+    return clean_filters
+
+
+def run_feature_extraction(input_report: Path, output_dir: Path):
+    if not input_report.exists():
+        raise FileNotFoundError(f"Input report non trovato: {input_report}")
+
+    codes_dir = output_dir / "gabor_codes"
+    preview_dir = output_dir / "code_previews"
+    contact_dir = output_dir / "contact_sheets"
+
+    feature_report = output_dir / "features_report.csv"
+    summary_path = output_dir / "features_summary.json"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    codes_dir.mkdir(parents=True, exist_ok=True)
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    contact_dir.mkdir(parents=True, exist_ok=True)
+
+    df = read_normalization_report(input_report)
 
     # Usiamo solo normalizzazioni OK.
     df = df[df["normalization_ok"] == True].copy().reset_index(drop=True)
 
     print("=== GABOR-STYLE FEATURE EXTRACTION ===")
-    print(f"Input report: {INPUT_REPORT}")
+    print(f"Input report: {project_display_path(input_report)}")
+    print(f"Output dir: {project_display_path(output_dir)}")
     print(f"Immagini normalizzate OK: {len(df)}")
     print(f"Numero filtri Gabor: {len(GABOR_FILTERS)}")
     print()
 
     rows = []
 
-    for idx, row in df.iterrows():
-        norm_path = Path(row["normalized_path"])
-        mask_path = Path(row["mask_path"])
-
+    for processed_idx, (_, row) in enumerate(df.iterrows(), start=1):
         out_row = row.to_dict()
 
-        if not norm_path.exists():
-            out_row["feature_ok"] = False
-            out_row["feature_error"] = f"normalized image not found: {norm_path}"
-            rows.append(out_row)
-            continue
-
-        if not mask_path.exists():
-            out_row["feature_ok"] = False
-            out_row["feature_error"] = f"mask not found: {mask_path}"
-            rows.append(out_row)
-            continue
-
-        img = cv2.imread(str(norm_path), cv2.IMREAD_GRAYSCALE)
-        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-
-        if img is None:
-            out_row["feature_ok"] = False
-            out_row["feature_error"] = "cv2.imread normalized failed"
-            rows.append(out_row)
-            continue
-
-        if mask is None:
-            out_row["feature_ok"] = False
-            out_row["feature_error"] = "cv2.imread mask failed"
-            rows.append(out_row)
-            continue
-
         try:
+            norm_path = resolve_from_project(Path(str(row["normalized_path"])))
+            mask_path = resolve_from_project(Path(str(row["mask_path"])))
+
+            if not norm_path.exists():
+                out_row["feature_ok"] = False
+                out_row["feature_error"] = f"normalized image not found: {norm_path}"
+                rows.append(out_row)
+                continue
+
+            if not mask_path.exists():
+                out_row["feature_ok"] = False
+                out_row["feature_error"] = f"mask not found: {mask_path}"
+                rows.append(out_row)
+                continue
+
+            img = cv2.imread(str(norm_path), cv2.IMREAD_GRAYSCALE)
+            mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+
+            if img is None:
+                out_row["feature_ok"] = False
+                out_row["feature_error"] = f"cv2.imread normalized failed: {norm_path}"
+                rows.append(out_row)
+                continue
+
+            if mask is None:
+                out_row["feature_ok"] = False
+                out_row["feature_error"] = f"cv2.imread mask failed: {mask_path}"
+                rows.append(out_row)
+                continue
+
             norm_img = normalize_valid_pixels(img, mask)
 
             if norm_img is None:
@@ -287,8 +381,8 @@ def main():
 
             base = safe_name(row["relative_path"])
 
-            code_path = CODES_DIR / f"{base}.npz"
-            preview_path = PREVIEW_DIR / f"{base}_code_preview.png"
+            code_path = codes_dir / f"{base}.npz"
+            preview_path = preview_dir / f"{base}_code_preview.png"
 
             save_code_npz(code_path, code, code_mask, row["relative_path"])
             make_code_preview(code, code_mask, preview_path)
@@ -298,8 +392,8 @@ def main():
 
             out_row["feature_ok"] = True
             out_row["feature_error"] = ""
-            out_row["code_path"] = str(code_path)
-            out_row["code_preview_path"] = str(preview_path)
+            out_row["code_path"] = project_relative_or_absolute(code_path)
+            out_row["code_preview_path"] = project_relative_or_absolute(preview_path)
             out_row["num_filters"] = len(GABOR_FILTERS)
             out_row["code_height"] = int(code.shape[1])
             out_row["code_width"] = int(code.shape[2])
@@ -312,11 +406,11 @@ def main():
 
         rows.append(out_row)
 
-        if (idx + 1) % 250 == 0:
-            print(f"Estratte feature {idx + 1}/{len(df)} immagini")
+        if processed_idx % 250 == 0:
+            print(f"Estratte feature {processed_idx}/{len(df)} immagini")
 
     fdf = pd.DataFrame(rows)
-    fdf.to_csv(FEATURE_REPORT, index=False)
+    fdf.to_csv(feature_report, index=False)
 
     ok_df = fdf[fdf["feature_ok"] == True].copy()
 
@@ -324,39 +418,34 @@ def main():
         "input_images": int(len(df)),
         "feature_ok": int(len(ok_df)),
         "feature_failed": int(len(df) - len(ok_df)),
+        "input_report": project_display_path(input_report),
+        "output_dir": project_display_path(output_dir),
         "num_filters": len(GABOR_FILTERS),
-        "filters": GABOR_FILTERS,
+        "filters": filters_for_json(),
     }
 
     if len(ok_df) > 0:
         for col in ["valid_bit_ratio", "bit_one_ratio"]:
-            values = pd.to_numeric(ok_df[col], errors="coerce").dropna()
-            summary[col] = {
-                "min": float(values.min()),
-                "q1": float(values.quantile(0.25)),
-                "median": float(values.median()),
-                "mean": float(values.mean()),
-                "q3": float(values.quantile(0.75)),
-                "max": float(values.max()),
-            }
+            summary[col] = summarize_values(ok_df[col])
 
-    with SUMMARY_PATH.open("w", encoding="utf-8") as f:
+    with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
     make_contact_sheet(
         ok_df,
         title="Gabor-style code previews",
-        output_path=CONTACT_DIR / "gabor_code_previews.png",
+        output_path=contact_dir / "gabor_code_previews.png",
         n=45,
     )
 
-    low_valid = ok_df.sort_values("valid_bit_ratio", ascending=True).head(45)
-    make_contact_sheet(
-        low_valid,
-        title="Lowest valid bit ratio code previews",
-        output_path=CONTACT_DIR / "lowest_valid_bit_ratio_previews.png",
-        n=45,
-    )
+    if len(ok_df) > 0:
+        low_valid = ok_df.sort_values("valid_bit_ratio", ascending=True).head(45)
+        make_contact_sheet(
+            low_valid,
+            title="Lowest valid bit ratio code previews",
+            output_path=contact_dir / "lowest_valid_bit_ratio_previews.png",
+            n=45,
+        )
 
     print()
     print("=== FEATURE EXTRACTION SUMMARY ===")
@@ -373,11 +462,34 @@ def main():
                 print(f"  {k}: {v}")
             print()
 
-    print(f"Feature report:   {FEATURE_REPORT}")
-    print(f"Summary:          {SUMMARY_PATH}")
-    print(f"Codici in:        {CODES_DIR}")
-    print(f"Preview in:       {PREVIEW_DIR}")
-    print(f"Contact sheets:   {CONTACT_DIR}")
+    print(f"Feature report:   {project_display_path(feature_report)}")
+    print(f"Summary:          {project_display_path(summary_path)}")
+    print(f"Codici in:        {project_display_path(codes_dir)}")
+    print(f"Preview in:       {project_display_path(preview_dir)}")
+    print(f"Contact sheets:   {project_display_path(contact_dir)}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--input-report",
+        type=Path,
+        default=DEFAULT_INPUT_REPORT,
+        help="Path al report di normalizzazione V3. Default: data/normalized/daugman_strict_v3/normalized_daugman_strict_v3_report.csv",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Cartella output feature. Default: data/features/daugman_strict_v3",
+    )
+
+    args = parser.parse_args()
+
+    run_feature_extraction(
+        input_report=resolve_from_project(args.input_report),
+        output_dir=resolve_from_project(args.output_dir),
+    )
 
 
 if __name__ == "__main__":

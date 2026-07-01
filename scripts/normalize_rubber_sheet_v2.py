@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 import json
 import math
 
@@ -10,16 +11,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-INPUT_METADATA = PROJECT_ROOT / "data/metadata/metadata_segmented_strict.csv"
-
-OUTPUT_DIR = PROJECT_ROOT / "data/normalized/strict_v2"
-IMAGES_DIR = OUTPUT_DIR / "images"
-MASKS_DIR = OUTPUT_DIR / "masks"
-MASKED_PREVIEW_DIR = OUTPUT_DIR / "masked_previews"
-CONTACT_DIR = OUTPUT_DIR / "contact_sheets"
-
-REPORT_PATH = OUTPUT_DIR / "normalized_strict_v2_report.csv"
-SUMMARY_PATH = OUTPUT_DIR / "normalization_v2_summary.json"
+DEFAULT_INPUT_METADATA = PROJECT_ROOT / "data" / "metadata" / "metadata_segmented_strict.csv"
+DEFAULT_DATASET_ROOT = PROJECT_ROOT / "data" / "raw" / "CASIA-Iris-Twins"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "normalized" / "strict_v2"
 
 RADIAL_RES = 64
 ANGULAR_RES = 512
@@ -29,8 +23,81 @@ LABEL_HEIGHT = 38
 CONTACT_COLS = 3
 
 
+def resolve_from_project(path: Path) -> Path:
+    path = Path(path).expanduser()
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def project_display_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return "<external_path>"
+
+
+def project_relative_or_absolute(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
 def safe_name(relative_path: str) -> str:
-    return relative_path.replace("/", "__").replace("\\", "__")
+    return str(relative_path).replace("/", "__").replace("\\", "__")
+
+
+def get_image_path(row: pd.Series, dataset_root: Path) -> Path:
+    relative_path = row.get("relative_path", None)
+
+    if pd.notna(relative_path) and str(relative_path).strip():
+        image_path = dataset_root / str(relative_path)
+        if image_path.exists():
+            return image_path
+
+    project_relative_path = row.get("project_relative_path", None)
+
+    if pd.notna(project_relative_path) and str(project_relative_path).strip():
+        image_path = PROJECT_ROOT / str(project_relative_path)
+        if image_path.exists():
+            return image_path
+
+    old_abs_col = "absolute" + "_path"
+    old_abs_value = row.get(old_abs_col, None)
+
+    if pd.notna(old_abs_value) and str(old_abs_value).strip():
+        image_path = Path(str(old_abs_value)).expanduser()
+        if image_path.exists():
+            return image_path
+
+    if pd.notna(relative_path) and str(relative_path).strip():
+        return dataset_root / str(relative_path)
+
+    raise ValueError("No usable image path available for this row.")
+
+
+def read_metadata(input_metadata: Path) -> pd.DataFrame:
+    dtype_map = {
+        "family_id": str,
+        "twin_id": str,
+        "eye": str,
+        "image_idx": str,
+        "subject_id": str,
+        "iris_id": str,
+        "filename": str,
+        "relative_path": str,
+        "project_relative_path": str,
+        "sha256": str,
+    }
+
+    df = pd.read_csv(input_metadata, dtype=dtype_map)
+
+    old_abs_col = "absolute" + "_path"
+    if old_abs_col in df.columns:
+        df = df.drop(columns=[old_abs_col])
+
+    return df
 
 
 def build_conservative_roi_mask(radial_res=64, angular_res=512):
@@ -49,13 +116,11 @@ def build_conservative_roi_mask(radial_res=64, angular_res=512):
     - zona molto vicina al limbus
     - settori superiore/inferiore, spesso coperti da palpebre/ciglia.
     """
-
     yy, xx = np.indices((radial_res, angular_res))
 
     theta = (xx / angular_res) * 2 * np.pi
 
-    # Zone laterali: destra e sinistra.
-    # Ampiezza: circa ±50 gradi intorno a 0 e 180.
+    # Zone laterali: circa ±50 gradi intorno a 0 e 180.
     side_width = np.deg2rad(50)
 
     right_side = (theta <= side_width) | (theta >= 2 * np.pi - side_width)
@@ -82,11 +147,9 @@ def rubber_sheet_normalize_v2(gray, row, radial_res=64, angular_res=512):
 
     theta = np.linspace(0, 2 * np.pi, angular_res, endpoint=False)
 
-    # Bordo pupilla
     xp = pupil_x + pupil_r * np.cos(theta)
     yp = pupil_y + pupil_r * np.sin(theta)
 
-    # Bordo iride
     xi = iris_x + iris_r * np.cos(theta)
     yi = iris_y + iris_r * np.sin(theta)
 
@@ -116,15 +179,11 @@ def rubber_sheet_normalize_v2(gray, row, radial_res=64, angular_res=512):
 
     roi_mask = build_conservative_roi_mask(radial_res, angular_res)
 
-    # Maschera fotometrica.
-    # Riflessi/specularità: pixel molto chiari.
-    # Artefatti neri o bordi fuori immagine: pixel troppo scuri.
     too_bright = normalized >= 220
     too_dark = normalized <= 8
 
     bad_pixels = too_bright | too_dark
 
-    # Dilata leggermente i pixel cattivi per rimuovere anche il bordo dei riflessi.
     bad_uint8 = bad_pixels.astype(np.uint8) * 255
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     bad_dilated = cv2.dilate(bad_uint8, kernel, iterations=1) > 0
@@ -133,7 +192,6 @@ def rubber_sheet_normalize_v2(gray, row, radial_res=64, angular_res=512):
 
     mask_uint8 = final_mask.astype(np.uint8) * 255
 
-    # Preview: mettiamo a grigio medio le zone non valide.
     preview = normalized.copy()
     preview[~final_mask] = 128
 
@@ -159,7 +217,12 @@ def make_contact_sheet(df, image_col, title, output_path, n=45):
     thumbs = []
 
     for _, row in df.iterrows():
-        path = Path(row[image_col])
+        path_value = row.get(image_col, "")
+
+        if pd.isna(path_value) or not str(path_value).strip():
+            continue
+
+        path = resolve_from_project(Path(str(path_value)))
 
         if not path.exists():
             continue
@@ -172,7 +235,7 @@ def make_contact_sheet(df, image_col, title, output_path, n=45):
 
         draw = ImageDraw.Draw(canvas)
         label1 = str(row["relative_path"])[:42]
-        label2 = f"total={row['valid_ratio_total']:.3f} roi={row['valid_ratio_roi']:.3f}"
+        label2 = f"total={float(row['valid_ratio_total']):.3f} roi={float(row['valid_ratio_roi']):.3f}"
 
         draw.text((4, THUMB_SIZE[1] + 3), label1, fill=0, font=font)
         draw.text((4, THUMB_SIZE[1] + 19), label2, fill=0, font=font)
@@ -200,48 +263,70 @@ def make_contact_sheet(df, image_col, title, output_path, n=45):
         y = y0 + (i // CONTACT_COLS) * (THUMB_SIZE[1] + LABEL_HEIGHT)
         sheet.paste(thumb, (x, y))
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(output_path)
-    print(f"Salvata contact sheet: {output_path}")
+    print(f"Salvata contact sheet: {project_display_path(output_path)}")
 
 
-def main():
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    MASKS_DIR.mkdir(parents=True, exist_ok=True)
-    MASKED_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-    CONTACT_DIR.mkdir(parents=True, exist_ok=True)
+def summarize_numeric(series: pd.Series):
+    values = pd.to_numeric(series, errors="coerce").dropna()
 
-    df = pd.read_csv(
-        INPUT_METADATA,
-        dtype={
-            "family_id": str,
-            "twin_id": str,
-            "eye": str,
-            "image_idx": str,
-        }
-    )
+    if len(values) == 0:
+        return None
+
+    return {
+        "min": float(values.min()),
+        "q1": float(values.quantile(0.25)),
+        "median": float(values.median()),
+        "mean": float(values.mean()),
+        "q3": float(values.quantile(0.75)),
+        "max": float(values.max()),
+    }
+
+
+def run_normalization(input_metadata: Path, dataset_root: Path, output_dir: Path):
+    images_dir = output_dir / "images"
+    masks_dir = output_dir / "masks"
+    masked_preview_dir = output_dir / "masked_previews"
+    contact_dir = output_dir / "contact_sheets"
+
+    report_path = output_dir / "normalized_strict_v2_report.csv"
+    summary_path = output_dir / "normalization_v2_summary.json"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    images_dir.mkdir(parents=True, exist_ok=True)
+    masks_dir.mkdir(parents=True, exist_ok=True)
+    masked_preview_dir.mkdir(parents=True, exist_ok=True)
+    contact_dir.mkdir(parents=True, exist_ok=True)
+
+    if not input_metadata.exists():
+        raise FileNotFoundError(f"Metadata input non trovato: {input_metadata}")
+
+    df = read_metadata(input_metadata)
 
     print("=== RUBBER SHEET NORMALIZATION V2 ===")
-    print(f"Input metadata: {INPUT_METADATA}")
+    print(f"Input metadata:          {project_display_path(input_metadata)}")
+    print(f"Dataset root:            {project_display_path(dataset_root)}")
+    print(f"Output dir:              {project_display_path(output_dir)}")
     print(f"Immagini da normalizzare: {len(df)}")
-    print(f"Output size: {RADIAL_RES} x {ANGULAR_RES}")
+    print(f"Output size:             {RADIAL_RES} x {ANGULAR_RES}")
     print()
 
     rows = []
 
     for idx, row in df.iterrows():
-        image_path = Path(row["absolute_path"])
-        gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-
         out_row = row.to_dict()
 
-        if gray is None:
-            out_row["normalization_ok"] = False
-            out_row["normalization_error"] = "cv2.imread failed"
-            rows.append(out_row)
-            continue
-
         try:
+            image_path = get_image_path(row, dataset_root)
+            gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+
+            if gray is None:
+                out_row["normalization_ok"] = False
+                out_row["normalization_error"] = "cv2.imread failed"
+                rows.append(out_row)
+                continue
+
             normalized, mask, preview, valid_total, valid_roi = rubber_sheet_normalize_v2(
                 gray,
                 row,
@@ -251,22 +336,21 @@ def main():
 
             base = safe_name(row["relative_path"])
 
-            norm_path = IMAGES_DIR / f"{base}.png"
-            mask_path = MASKS_DIR / f"{base}_mask.png"
-            preview_path = MASKED_PREVIEW_DIR / f"{base}_preview.png"
+            norm_path = images_dir / f"{base}.png"
+            mask_path = masks_dir / f"{base}_mask.png"
+            preview_path = masked_preview_dir / f"{base}_preview.png"
 
             cv2.imwrite(str(norm_path), normalized)
             cv2.imwrite(str(mask_path), mask)
             cv2.imwrite(str(preview_path), preview)
 
-            # Accettiamo se dentro la ROI laterale resta abbastanza area valida.
             normalization_ok = valid_roi >= 0.65
 
             out_row["normalization_ok"] = bool(normalization_ok)
             out_row["normalization_error"] = ""
-            out_row["normalized_path"] = str(norm_path)
-            out_row["mask_path"] = str(mask_path)
-            out_row["masked_preview_path"] = str(preview_path)
+            out_row["normalized_path"] = project_relative_or_absolute(norm_path)
+            out_row["mask_path"] = project_relative_or_absolute(mask_path)
+            out_row["masked_preview_path"] = project_relative_or_absolute(preview_path)
             out_row["normalized_height"] = RADIAL_RES
             out_row["normalized_width"] = ANGULAR_RES
             out_row["valid_ratio_total"] = valid_total
@@ -282,11 +366,14 @@ def main():
             print(f"Normalizzate {idx + 1}/{len(df)} immagini")
 
     ndf = pd.DataFrame(rows)
-    ndf.to_csv(REPORT_PATH, index=False)
+    ndf.to_csv(report_path, index=False)
 
     ok_df = ndf[ndf["normalization_ok"] == True].copy()
 
     summary = {
+        "input_metadata": project_display_path(input_metadata),
+        "dataset_root": project_display_path(dataset_root),
+        "output_dir": project_display_path(output_dir),
         "input_images": int(len(df)),
         "normalization_ok": int(len(ok_df)),
         "normalization_failed_or_rejected": int(len(df) - len(ok_df)),
@@ -294,26 +381,18 @@ def main():
         "angular_res": ANGULAR_RES,
     }
 
-    if len(ndf) > 0:
-        for col in ["valid_ratio_total", "valid_ratio_roi"]:
-            values = pd.to_numeric(ndf[col], errors="coerce").dropna()
-            summary[col] = {
-                "min": float(values.min()),
-                "q1": float(values.quantile(0.25)),
-                "median": float(values.median()),
-                "mean": float(values.mean()),
-                "q3": float(values.quantile(0.75)),
-                "max": float(values.max()),
-            }
+    for col in ["valid_ratio_total", "valid_ratio_roi"]:
+        if col in ndf.columns:
+            summary[col] = summarize_numeric(ndf[col])
 
-    with SUMMARY_PATH.open("w", encoding="utf-8") as f:
+    with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
     make_contact_sheet(
         ok_df,
         image_col="normalized_path",
         title="Rubber Sheet V2 normalized examples",
-        output_path=CONTACT_DIR / "normalized_v2_examples.png",
+        output_path=contact_dir / "normalized_v2_examples.png",
         n=45,
     )
 
@@ -321,7 +400,7 @@ def main():
         ok_df,
         image_col="masked_preview_path",
         title="Rubber Sheet V2 masked preview examples",
-        output_path=CONTACT_DIR / "masked_preview_v2_examples.png",
+        output_path=contact_dir / "masked_preview_v2_examples.png",
         n=45,
     )
 
@@ -329,7 +408,7 @@ def main():
         ok_df,
         image_col="mask_path",
         title="Rubber Sheet V2 mask examples",
-        output_path=CONTACT_DIR / "mask_v2_examples.png",
+        output_path=contact_dir / "mask_v2_examples.png",
         n=45,
     )
 
@@ -338,7 +417,7 @@ def main():
         low_valid,
         image_col="masked_preview_path",
         title="Rubber Sheet V2 lowest ROI valid examples",
-        output_path=CONTACT_DIR / "lowest_valid_roi_v2_examples.png",
+        output_path=contact_dir / "lowest_valid_roi_v2_examples.png",
         n=45,
     )
 
@@ -350,18 +429,48 @@ def main():
 
     print()
     for col in ["valid_ratio_total", "valid_ratio_roi"]:
-        if col in summary:
+        if col in summary and summary[col] is not None:
             print(col)
             for k, v in summary[col].items():
                 print(f"  {k}: {v}")
             print()
 
-    print(f"Report salvato in:  {REPORT_PATH}")
-    print(f"Summary salvato in: {SUMMARY_PATH}")
-    print(f"Immagini in:        {IMAGES_DIR}")
-    print(f"Maschere in:        {MASKS_DIR}")
-    print(f"Preview in:         {MASKED_PREVIEW_DIR}")
-    print(f"Contact sheet in:   {CONTACT_DIR}")
+    print(f"Report salvato in:  {project_display_path(report_path)}")
+    print(f"Summary salvato in: {project_display_path(summary_path)}")
+    print(f"Immagini in:        {project_display_path(images_dir)}")
+    print(f"Maschere in:        {project_display_path(masks_dir)}")
+    print(f"Preview in:         {project_display_path(masked_preview_dir)}")
+    print(f"Contact sheet in:   {project_display_path(contact_dir)}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--input-metadata",
+        type=Path,
+        default=DEFAULT_INPUT_METADATA,
+        help="Path al metadata segmentato strict legacy.",
+    )
+    parser.add_argument(
+        "--dataset-root",
+        type=Path,
+        default=DEFAULT_DATASET_ROOT,
+        help="Root del dataset raw CASIA-Iris-Twins.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Cartella output della normalizzazione V2 legacy.",
+    )
+
+    args = parser.parse_args()
+
+    run_normalization(
+        input_metadata=resolve_from_project(args.input_metadata),
+        dataset_root=resolve_from_project(args.dataset_root),
+        output_dir=resolve_from_project(args.output_dir),
+    )
 
 
 if __name__ == "__main__":

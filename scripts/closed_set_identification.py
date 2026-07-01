@@ -1,28 +1,70 @@
 from pathlib import Path
 import argparse
 import json
-import math
 
 import numpy as np
 import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-INPUT_FEATURES = PROJECT_ROOT / "data/features/daugman_strict_v3/features_report.csv"
-
-OUTPUT_DIR = PROJECT_ROOT / "data/identification_closed_set/daugman_strict_v3"
-PLOTS_DIR = OUTPUT_DIR / "plots"
-
-RESULTS_CSV = OUTPUT_DIR / "closed_set_results.csv"
-TOPK_CSV_GZ = OUTPUT_DIR / "closed_set_topk.csv.gz"
-CMC_CSV = OUTPUT_DIR / "cmc_curve.csv"
-SUMMARY_JSON = OUTPUT_DIR / "closed_set_summary.json"
+DEFAULT_INPUT_FEATURES = PROJECT_ROOT / "data" / "features" / "daugman_strict_v3" / "features_report.csv"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "identification_closed_set" / "daugman_strict_v3"
 
 
-def load_code_npz(path):
-    data = np.load(path)
+def resolve_from_project(path: Path) -> Path:
+    path = Path(path).expanduser()
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def project_display_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return "<external_path>"
+
+
+def read_features(input_features: Path) -> pd.DataFrame:
+    dtype_map = {
+        "family_id": str,
+        "twin_id": str,
+        "eye": str,
+        "subject_id": str,
+        "iris_id": str,
+        "image_idx": str,
+        "filename": str,
+        "relative_path": str,
+        "project_relative_path": str,
+        "sha256": str,
+        "normalized_path": str,
+        "mask_path": str,
+        "masked_preview_path": str,
+        "code_path": str,
+        "code_preview_path": str,
+    }
+
+    df = pd.read_csv(input_features, dtype=dtype_map)
+
+    df["feature_ok"] = (
+        df["feature_ok"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    )
+
+    df["valid_bit_ratio"] = pd.to_numeric(df["valid_bit_ratio"], errors="coerce")
+
+    return df
+
+
+def load_code_npz(path: Path):
+    data = np.load(str(path))
     code = data["code"].astype(bool)
     mask = data["mask"].astype(bool)
     return code, mask
@@ -102,7 +144,7 @@ def choose_gallery_probe(df, selection="best_valid", seed=42):
         if selection == "best_valid":
             group = group.sort_values(
                 ["valid_bit_ratio", "relative_path"],
-                ascending=[False, True]
+                ascending=[False, True],
             )
             gallery = group.iloc[0]
 
@@ -149,15 +191,17 @@ def make_cmc(results_df, max_rank):
 
     for k in range(1, max_rank + 1):
         cms = float((results_df["true_rank"] <= k).mean())
-        rows.append({
-            "rank": int(k),
-            "CMS": cms,
-        })
+        rows.append(
+            {
+                "rank": int(k),
+                "CMS": cms,
+            }
+        )
 
     return pd.DataFrame(rows)
 
 
-def plot_cmc(cmc_df):
+def plot_cmc(cmc_df, plots_dir: Path):
     plt.figure()
     plt.plot(cmc_df["rank"], cmc_df["CMS"], marker="o")
     plt.xlabel("Rank k")
@@ -165,13 +209,12 @@ def plot_cmc(cmc_df):
     plt.title("Closed-set CMC curve")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(PLOTS_DIR / "cmc_curve.png")
+    plt.savefig(plots_dir / "cmc_curve.png", dpi=160)
     plt.close()
 
 
-def plot_rank_histogram(results_df):
+def plot_rank_histogram(results_df, plots_dir: Path):
     ranks = results_df["true_rank"].dropna().astype(int)
-
     clipped = ranks.clip(upper=20)
 
     plt.figure()
@@ -180,11 +223,11 @@ def plot_rank_histogram(results_df):
     plt.ylabel("Number of probes")
     plt.title("Distribution of true identity rank")
     plt.tight_layout()
-    plt.savefig(PLOTS_DIR / "true_rank_histogram.png")
+    plt.savefig(plots_dir / "true_rank_histogram.png", dpi=160)
     plt.close()
 
 
-def plot_margin_histogram(results_df):
+def plot_margin_histogram(results_df, plots_dir: Path):
     values = results_df["margin_best_impostor_minus_true"].dropna()
 
     plt.figure()
@@ -193,57 +236,55 @@ def plot_margin_histogram(results_df):
     plt.ylabel("Number of probes")
     plt.title("Identification margin")
     plt.tight_layout()
-    plt.savefig(PLOTS_DIR / "identification_margin_histogram.png")
+    plt.savefig(plots_dir / "identification_margin_histogram.png", dpi=160)
     plt.close()
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--max-shift", type=int, default=16)
-    parser.add_argument("--shift-step", type=int, default=2)
-    parser.add_argument("--min-common-bits", type=int, default=1000)
-    parser.add_argument(
-        "--gallery-selection",
-        type=str,
-        default="best_valid",
-        choices=["best_valid", "first", "random"],
-    )
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--top-k", type=int, default=10)
-    parser.add_argument("--cmc-max-rank", type=int, default=20)
-    args = parser.parse_args()
+def pct(count, total):
+    return float(count / total) if total else 0.0
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    shifts = list(range(-args.max_shift, args.max_shift + 1, args.shift_step))
+def run_closed_set(
+    input_features: Path,
+    output_dir: Path,
+    max_shift: int,
+    shift_step: int,
+    min_common_bits: int,
+    gallery_selection: str,
+    seed: int,
+    top_k: int,
+    cmc_max_rank: int,
+):
+    if not input_features.exists():
+        raise FileNotFoundError(f"Feature report non trovato: {input_features}")
+
+    plots_dir = output_dir / "plots"
+
+    results_csv = output_dir / "closed_set_results.csv"
+    topk_csv_gz = output_dir / "closed_set_topk.csv.gz"
+    cmc_csv = output_dir / "cmc_curve.csv"
+    summary_json = output_dir / "closed_set_summary.json"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    shifts = list(range(-max_shift, max_shift + 1, shift_step))
 
     print("=== CLOSED-SET IDENTIFICATION 1:N ===")
-    print(f"Input features:       {INPUT_FEATURES}")
-    print(f"Gallery selection:    {args.gallery_selection}")
+    print(f"Input features:       {project_display_path(input_features)}")
+    print(f"Output dir:           {project_display_path(output_dir)}")
+    print(f"Gallery selection:    {gallery_selection}")
     print(f"Shifts:               {shifts}")
-    print(f"Min common bits:      {args.min_common_bits}")
+    print(f"Min common bits:      {min_common_bits}")
     print()
 
-    df = pd.read_csv(
-        INPUT_FEATURES,
-        dtype={
-            "family_id": str,
-            "twin_id": str,
-            "eye": str,
-            "image_idx": str,
-            "subject_id": str,
-            "iris_id": str,
-        }
-    )
-
-    df = df[df["feature_ok"].astype(str).str.lower().isin(["true", "1"])].copy()
-    df["valid_bit_ratio"] = pd.to_numeric(df["valid_bit_ratio"], errors="coerce")
+    df = read_features(input_features)
+    df = df[df["feature_ok"] == True].copy().reset_index(drop=True)
 
     gallery_rows, probe_rows = choose_gallery_probe(
         df,
-        selection=args.gallery_selection,
-        seed=args.seed,
+        selection=gallery_selection,
+        seed=seed,
     )
 
     print(f"Feature images OK:    {len(df)}")
@@ -252,16 +293,21 @@ def main():
     print()
 
     unique_paths = sorted(
-        set([r["code_path"] for r in gallery_rows]) |
-        set([r["code_path"] for r in probe_rows])
+        set([str(r["code_path"]) for r in gallery_rows])
+        | set([str(r["code_path"]) for r in probe_rows])
     )
 
     print(f"Codici unici da caricare: {len(unique_paths)}")
 
     code_cache = {}
 
-    for idx, path in enumerate(unique_paths):
-        code_cache[path] = load_code_npz(path)
+    for idx, path_value in enumerate(unique_paths):
+        resolved_path = resolve_from_project(Path(path_value))
+
+        if not resolved_path.exists():
+            raise FileNotFoundError(f"Codice Gabor non trovato: {resolved_path}")
+
+        code_cache[path_value] = load_code_npz(resolved_path)
 
         if (idx + 1) % 250 == 0:
             print(f"Caricati {idx + 1}/{len(unique_paths)} codici")
@@ -274,12 +320,12 @@ def main():
     comparison_counter = 0
 
     for p_idx, probe in enumerate(probe_rows):
-        probe_code, probe_mask = code_cache[probe["code_path"]]
+        probe_code, probe_mask = code_cache[str(probe["code_path"])]
 
         ranking = []
 
         for gallery in gallery_rows:
-            gallery_code, gallery_mask = code_cache[gallery["code_path"]]
+            gallery_code, gallery_mask = code_cache[str(gallery["code_path"])]
 
             match = masked_hamming_distance(
                 probe_code,
@@ -287,7 +333,7 @@ def main():
                 gallery_code,
                 gallery_mask,
                 shifts=shifts,
-                min_common_bits=args.min_common_bits,
+                min_common_bits=min_common_bits,
             )
 
             if not match["match_ok"]:
@@ -318,17 +364,28 @@ def main():
 
         ranking = sorted(
             ranking,
-            key=lambda x: (x["score"], str(x["gallery_iris_id"]))
+            key=lambda x: (x["score"], str(x["gallery_iris_id"])),
         )
 
         for rank_idx, item in enumerate(ranking, start=1):
             item["rank"] = rank_idx
 
         true_items = [r for r in ranking if r["is_true"]]
-        true_item = true_items[0]
 
+        if not true_items:
+            raise RuntimeError(
+                f"Nessun template gallery genuine trovato per probe {probe['relative_path']}"
+            )
+
+        true_item = true_items[0]
         best_item = ranking[0]
-        best_impostor = next(r for r in ranking if not r["is_true"])
+
+        impostor_items = [r for r in ranking if not r["is_true"]]
+
+        if not impostor_items:
+            raise RuntimeError("La gallery contiene solo il genuine, impossibile calcolare best impostor.")
+
+        best_impostor = impostor_items[0]
 
         twin_items = [r for r in ranking if r["is_twin"]]
         twin_same_eye_items = [r for r in ranking if r["is_twin_same_eye"]]
@@ -390,30 +447,32 @@ def main():
 
         results.append(result)
 
-        for item in ranking[:args.top_k]:
-            topk_rows.append({
-                "probe_relative_path": probe["relative_path"],
-                "probe_family_id": probe["family_id"],
-                "probe_subject_id": probe["subject_id"],
-                "probe_iris_id": probe["iris_id"],
-                "probe_eye": probe["eye"],
+        for item in ranking[:top_k]:
+            topk_rows.append(
+                {
+                    "probe_relative_path": probe["relative_path"],
+                    "probe_family_id": probe["family_id"],
+                    "probe_subject_id": probe["subject_id"],
+                    "probe_iris_id": probe["iris_id"],
+                    "probe_eye": probe["eye"],
 
-                "rank": int(item["rank"]),
-                "gallery_relative_path": item["gallery_relative_path"],
-                "gallery_family_id": item["gallery_family_id"],
-                "gallery_subject_id": item["gallery_subject_id"],
-                "gallery_iris_id": item["gallery_iris_id"],
-                "gallery_eye": item["gallery_eye"],
+                    "rank": int(item["rank"]),
+                    "gallery_relative_path": item["gallery_relative_path"],
+                    "gallery_family_id": item["gallery_family_id"],
+                    "gallery_subject_id": item["gallery_subject_id"],
+                    "gallery_iris_id": item["gallery_iris_id"],
+                    "gallery_eye": item["gallery_eye"],
 
-                "score": float(item["score"]),
-                "relation_to_probe": item["relation_to_probe"],
-                "is_true": bool(item["is_true"]),
-                "is_twin": bool(item["is_twin"]),
-                "is_twin_same_eye": bool(item["is_twin_same_eye"]),
-                "is_twin_cross_eye": bool(item["is_twin_cross_eye"]),
-                "common_bits": int(item["common_bits"]),
-                "best_shift": item["best_shift"],
-            })
+                    "score": float(item["score"]),
+                    "relation_to_probe": item["relation_to_probe"],
+                    "is_true": bool(item["is_true"]),
+                    "is_twin": bool(item["is_twin"]),
+                    "is_twin_same_eye": bool(item["is_twin_same_eye"]),
+                    "is_twin_cross_eye": bool(item["is_twin_cross_eye"]),
+                    "common_bits": int(item["common_bits"]),
+                    "best_shift": item["best_shift"],
+                }
+            )
 
         if (p_idx + 1) % 100 == 0:
             print(
@@ -424,15 +483,15 @@ def main():
     results_df = pd.DataFrame(results)
     topk_df = pd.DataFrame(topk_rows)
 
-    results_df.to_csv(RESULTS_CSV, index=False)
-    topk_df.to_csv(TOPK_CSV_GZ, index=False, compression="gzip")
+    results_df.to_csv(results_csv, index=False)
+    topk_df.to_csv(topk_csv_gz, index=False, compression="gzip")
 
-    cmc_df = make_cmc(results_df, max_rank=args.cmc_max_rank)
-    cmc_df.to_csv(CMC_CSV, index=False)
+    cmc_df = make_cmc(results_df, max_rank=cmc_max_rank)
+    cmc_df.to_csv(cmc_csv, index=False)
 
-    plot_cmc(cmc_df)
-    plot_rank_histogram(results_df)
-    plot_margin_histogram(results_df)
+    plot_cmc(cmc_df, plots_dir)
+    plot_rank_histogram(results_df, plots_dir)
+    plot_margin_histogram(results_df, plots_dir)
 
     n_probes = len(results_df)
     rank1_correct = int(results_df["rank1_correct"].sum())
@@ -444,26 +503,26 @@ def main():
     probes_with_twin = results_df["min_twin_rank"].notna()
     n_probes_with_twin = int(probes_with_twin.sum())
 
-    def pct(count, total):
-        return float(count / total) if total else 0.0
-
     summary = {
+        "input_features": project_display_path(input_features),
+        "output_dir": project_display_path(output_dir),
+
         "input_feature_images": int(len(df)),
         "gallery_templates": int(len(gallery_rows)),
         "probe_templates": int(len(probe_rows)),
-        "gallery_selection": args.gallery_selection,
-        "seed": args.seed,
+        "gallery_selection": gallery_selection,
+        "seed": int(seed),
 
-        "max_shift": args.max_shift,
-        "shift_step": args.shift_step,
-        "shifts": shifts,
-        "min_common_bits": args.min_common_bits,
+        "max_shift": int(max_shift),
+        "shift_step": int(shift_step),
+        "shifts": [int(s) for s in shifts],
+        "min_common_bits": int(min_common_bits),
 
         "total_probe_gallery_comparisons": int(total_comparisons),
         "failed_probe_gallery_comparisons": int(failed_comparisons),
 
-        "rank1_correct": rank1_correct,
-        "rank1_errors": rank1_errors,
+        "rank1_correct": int(rank1_correct),
+        "rank1_errors": int(rank1_errors),
         "rank1_recognition_rate": float(rank1_rate),
 
         "CMS": {
@@ -512,16 +571,16 @@ def main():
         },
 
         "outputs": {
-            "results_csv": str(RESULTS_CSV),
-            "topk_csv_gz": str(TOPK_CSV_GZ),
-            "cmc_csv": str(CMC_CSV),
-            "cmc_plot": str(PLOTS_DIR / "cmc_curve.png"),
-            "true_rank_histogram": str(PLOTS_DIR / "true_rank_histogram.png"),
-            "margin_histogram": str(PLOTS_DIR / "identification_margin_histogram.png"),
-        }
+            "results_csv": project_display_path(results_csv),
+            "topk_csv_gz": project_display_path(topk_csv_gz),
+            "cmc_csv": project_display_path(cmc_csv),
+            "cmc_plot": project_display_path(plots_dir / "cmc_curve.png"),
+            "true_rank_histogram": project_display_path(plots_dir / "true_rank_histogram.png"),
+            "margin_histogram": project_display_path(plots_dir / "identification_margin_histogram.png"),
+        },
     }
 
-    with SUMMARY_JSON.open("w", encoding="utf-8") as f:
+    with summary_json.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, allow_nan=False)
 
     print()
@@ -537,6 +596,7 @@ def main():
     print("CMS:")
     for k, v in summary["CMS"].items():
         print(f"  {k}: {v:.4f}")
+
     print()
     print("Twin analysis:")
     ta = summary["twin_analysis"]
@@ -545,13 +605,56 @@ def main():
     print(f"  Twin in top-5:               {ta['twin_in_top5_count']} ({ta['twin_in_top5_rate']:.4f})")
     print(f"  Twin in top-10:              {ta['twin_in_top10_count']} ({ta['twin_in_top10_rate']:.4f})")
     print(f"  Rank-1 errors caused by twin:{ta['rank1_error_is_twin_count']} ({ta['rank1_error_is_twin_rate_among_errors']:.4f} of errors)")
+
     print()
     print("Output:")
-    print(f"  Results: {RESULTS_CSV}")
-    print(f"  Top-k:   {TOPK_CSV_GZ}")
-    print(f"  CMC:     {CMC_CSV}")
-    print(f"  Summary: {SUMMARY_JSON}")
-    print(f"  Plots:   {PLOTS_DIR}")
+    print(f"  Results: {project_display_path(results_csv)}")
+    print(f"  Top-k:   {project_display_path(topk_csv_gz)}")
+    print(f"  CMC:     {project_display_path(cmc_csv)}")
+    print(f"  Summary: {project_display_path(summary_json)}")
+    print(f"  Plots:   {project_display_path(plots_dir)}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--input-features",
+        type=Path,
+        default=DEFAULT_INPUT_FEATURES,
+        help="Path a features_report.csv. Default: data/features/daugman_strict_v3/features_report.csv",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Cartella output closed-set. Default: data/identification_closed_set/daugman_strict_v3",
+    )
+    parser.add_argument("--max-shift", type=int, default=16)
+    parser.add_argument("--shift-step", type=int, default=2)
+    parser.add_argument("--min-common-bits", type=int, default=1000)
+    parser.add_argument(
+        "--gallery-selection",
+        type=str,
+        default="best_valid",
+        choices=["best_valid", "first", "random"],
+    )
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--cmc-max-rank", type=int, default=20)
+
+    args = parser.parse_args()
+
+    run_closed_set(
+        input_features=resolve_from_project(args.input_features),
+        output_dir=resolve_from_project(args.output_dir),
+        max_shift=args.max_shift,
+        shift_step=args.shift_step,
+        min_common_bits=args.min_common_bits,
+        gallery_selection=args.gallery_selection,
+        seed=args.seed,
+        top_k=args.top_k,
+        cmc_max_rank=args.cmc_max_rank,
+    )
 
 
 if __name__ == "__main__":
