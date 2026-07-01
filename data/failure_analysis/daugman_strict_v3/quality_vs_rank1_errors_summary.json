@@ -1,0 +1,27 @@
+{
+  "inputs": {
+    "closed_set_results": "data/identification_closed_set/daugman_strict_v3/closed_set_results.csv",
+    "features_report": "data/features/daugman_strict_v3/features_report.csv",
+    "quality_report": "data/quality/quality_report.csv"
+  },
+  "outputs": {
+    "quality_vs_rank1_errors_csv": "data/failure_analysis/daugman_strict_v3/quality_vs_rank1_errors.csv",
+    "quality_vs_rank1_probe_level_csv": "data/failure_analysis/daugman_strict_v3/quality_vs_rank1_probe_level.csv",
+    "plots_dir": "data/failure_analysis/daugman_strict_v3/quality_vs_rank1_plots"
+  },
+  "counts": {
+    "closed_set_probes": 1152,
+    "rank1_correct": 961,
+    "rank1_errors": 191
+  },
+  "effect_sizes_error_minus_correct": {
+    "valid_bit_ratio": -0.8379009979518536,
+    "bit_one_ratio": -0.24180831810684325,
+    "brightness": -0.005401764572071608,
+    "contrast": 0.12439958695536714,
+    "focus_score": -0.09504659685336157,
+    "dark_ratio": -0.011476515721446444,
+    "bright_ratio": -0.06622299992444348
+  },
+  "main_interpretation": "This analysis compares correctly identified probes with Rank-1 errors. The most relevant indicator is valid_bit_ratio: lower values suggest less usable iris texture after masking. Brightness, dark_ratio and bright_ratio are included to check whether errors are simply explained by exposure or illumination problems."
+}
