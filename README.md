@@ -231,4 +231,3 @@ Master's Degree in Cybersecurity
 Biometric Systems
 Academic Year 2025/2026
 
-```
