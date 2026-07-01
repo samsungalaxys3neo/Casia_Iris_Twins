@@ -56,10 +56,6 @@ Casia_Iris_Twins/
 └── Casia_Iris_Twins_Presentation.pdf
 ````
 
-The repository also includes:
-
-* **Casia_Iris_Twins_Report.pdf**: final written report;
-* **Casia_Iris_Twins_Presentation.pdf**: final presentation slides.
 
 The dataset and generated intermediate files are not included in the repository because they contain biometric images and large derived outputs.
 
