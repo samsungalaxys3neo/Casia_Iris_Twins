@@ -11,7 +11,7 @@ Fix principale rispetto alle versioni precedenti:
   foto sbagliata.
 
 Run:
-    cd /Users/sarahoualli/Desktop/BIO/iris_twins_project
+    cd path/Casia_Iris_Twins
     python3 scripts/demo_orale_strict_sample_v3.py --seed 42 --families 2 --images-per-iris 2 --open
 
 Output:
