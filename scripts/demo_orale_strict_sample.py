@@ -33,7 +33,8 @@ import matplotlib.pyplot as plt
 from PIL import Image, ImageDraw, ImageFont
 
 
-DEFAULT_REPO_ROOT = Path("/Users/sarahoualli/Desktop/BIO/iris_twins_project")
+
+DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 ARRAY_EXT = {".npy", ".npz"}
 EYE_FOLDERS = {"1L", "1R", "2L", "2R"}
