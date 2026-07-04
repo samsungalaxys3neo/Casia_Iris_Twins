@@ -98,7 +98,7 @@ CASIA-Iris-Twins/
 └── ...
 ```
 
-The dataset must be stored locally and passed to the pipeline using the `--raw-root` argument, put inside `data/raw/`.
+The dataset must be stored locally and put inside of Casia_Iris_Twins/data/raw and named `CASIA-Iris-Twins`.
 
 ---
 
@@ -132,12 +132,6 @@ The full pipeline can be executed using the provided runner script:
 
 ```bash
 python3 scripts/run_pipeline.py --raw-root "$(pwd)/data/raw/CASIA-Iris-Twins"
-```
-
-Example:
-
-```bash
-python scripts/run_pipeline.py --raw-root "/Users/yourname/Desktop/CASIA-Iris-Twins"
 ```
 
 The script runs the main stages used in the final report:
