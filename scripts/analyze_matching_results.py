@@ -153,7 +153,8 @@ def plot_boxplot(df: pd.DataFrame, plots_dir: Path):
         return
 
     plt.figure(figsize=(10, 5))
-    plt.boxplot(data, labels=labels, showfliers=False)
+    plt.boxplot(data, showfliers=False)
+    plt.xticks(range(1, len(labels) + 1), labels)
     plt.ylabel("Hamming Distance")
     plt.title("Hamming Distance by relation")
     plt.xticks(rotation=25, ha="right")
@@ -232,7 +233,7 @@ def compute_verification_metrics(df: pd.DataFrame, impostor_relation=None):
     eer = float((eer_row["FAR"] + eer_row["FRR"]) / 2.0)
 
     roc = metrics.sort_values("FAR")
-    auc = float(np.trapz(roc["GAR"], roc["FAR"]))
+    auc = float((np.trapezoid if hasattr(np, "trapezoid") else np.trapz)(roc["GAR"], roc["FAR"]))
 
     summary = {
         "impostor_set": name,
