@@ -112,11 +112,8 @@ def save_metric_boxplot(df: pd.DataFrame, metric: str, output_path: Path):
         return
 
     plt.figure(figsize=(5, 4))
-    plt.boxplot(
-        [correct, errors],
-        labels=["Rank-1 correct", "Rank-1 errors"],
-        showfliers=False,
-    )
+    plt.boxplot([correct, errors], showfliers=False)
+    plt.xticks([1, 2], ["Rank-1 correct", "Rank-1 errors"])
     plt.ylabel(metric)
     plt.title(f"{metric}: correct vs errors")
     plt.tight_layout()
