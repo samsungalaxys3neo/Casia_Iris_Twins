@@ -128,12 +128,6 @@ pip install -r requirements.txt
 
 ## How to Run the Full Pipeline
 
-Run a pre-fix:
-
-```bash
-python3 scripts/pre_run_fix_casia_iris_twins.py
-```
-
 The full pipeline can be executed using the provided runner script:
 
 ```bash
