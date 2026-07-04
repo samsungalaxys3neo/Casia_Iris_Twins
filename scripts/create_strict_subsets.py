@@ -6,10 +6,10 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_INPUT = PROJECT_ROOT / "data" / "metadata" / "metadata_segmented_strict.csv"
+DEFAULT_INPUT = PROJECT_ROOT / "data" / "metadata" / "metadata_daugman_strict.csv"
 
-DEFAULT_OUTPUT_MIN2 = PROJECT_ROOT / "data" / "metadata" / "metadata_segmented_strict_min2.csv"
-DEFAULT_OUTPUT_COMPLETE = PROJECT_ROOT / "data" / "metadata" / "metadata_segmented_strict_complete_families.csv"
+DEFAULT_OUTPUT_MIN2 = PROJECT_ROOT / "data" / "metadata" / "metadata_daugman_strict_min2.csv"
+DEFAULT_OUTPUT_COMPLETE = PROJECT_ROOT / "data" / "metadata" / "metadata_daugman_strict_complete_families.csv"
 DEFAULT_OUTPUT_SUMMARY = PROJECT_ROOT / "data" / "metadata" / "strict_subsets_summary.txt"
 
 
@@ -135,7 +135,7 @@ def main():
         "--input",
         type=Path,
         default=DEFAULT_INPUT,
-        help="Path a metadata_segmented_strict.csv.",
+        help="Path a metadata_daugman_strict.csv.",
     )
     parser.add_argument(
         "--output-min2",
