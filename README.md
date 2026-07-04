@@ -98,7 +98,7 @@ CASIA-Iris-Twins/
 └── ...
 ```
 
-The dataset must be stored locally and put inside of Casia_Iris_Twins/data/raw and named `CASIA-Iris-Twins`.
+The dataset must be stored locally and put inside of `Casia_Iris_Twins/data/raw` and named `CASIA-Iris-Twins`.
 
 ---
 
