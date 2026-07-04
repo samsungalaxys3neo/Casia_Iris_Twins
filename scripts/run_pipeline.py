@@ -5,9 +5,12 @@ Run the final iris-twins biometric pipeline.
 Usage:
     python scripts/run_pipeline.py --raw-root /absolute/path/to/CASIA-Iris-Twins
 
-The runner executes only the scripts used in the final report pipeline.
-It runs commands from the parent directory of the repository because some
-older scripts use the historical relative path "iris_twins_project/data/...".
+The raw dataset can be anywhere on the user's machine. The only requirement is
+that --raw-root points to the folder containing CASIA family folders such as:
+    00/1L, 00/1R, 00/2L, 00/2R, ..., 99/...
+
+This runner intentionally avoids computer-specific paths and does not require
+renaming the repository folder to iris_twins_project.
 """
 
 from __future__ import annotations
@@ -17,6 +20,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+EXPECTED_SUBFOLDERS = {"1L", "1R", "2L", "2R"}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the iris twins pipeline.")
@@ -24,7 +29,7 @@ def parse_args() -> argparse.Namespace:
         "--raw-root",
         required=True,
         type=Path,
-        help="Absolute path to the raw CASIA-Iris-Twins dataset folder.",
+        help="Path to the raw CASIA-Iris-Twins dataset folder.",
     )
     parser.add_argument(
         "--max-unrelated",
@@ -41,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--python",
         default=sys.executable,
-        help="Python executable to use.",
+        help="Python executable to use. Default: the current interpreter.",
     )
     parser.add_argument(
         "--dry-run",
@@ -61,6 +66,47 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def validate_dataset_root(raw_root: Path) -> Path:
+    """Validate the external dataset root without assuming any fixed location."""
+    raw_root = raw_root.expanduser().resolve()
+
+    if not raw_root.exists():
+        raise FileNotFoundError(f"Raw dataset not found: {raw_root}")
+    if not raw_root.is_dir():
+        raise NotADirectoryError(f"--raw-root must be a directory: {raw_root}")
+
+    family_dirs = sorted(
+        p for p in raw_root.iterdir() if p.is_dir() and re_fullmatch_two_digits(p.name)
+    )
+    if not family_dirs:
+        raise FileNotFoundError(
+            "The dataset root does not look like CASIA-Iris-Twins.\n"
+            f"Given path: {raw_root}\n"
+            "Expected folders like 00, 01, 02, ... containing 1L/1R/2L/2R.\n"
+            "Pass the extracted dataset folder with --raw-root, not the code repository."
+        )
+
+    has_expected_subfolder = False
+    for family_dir in family_dirs[:10]:
+        subfolders = {p.name for p in family_dir.iterdir() if p.is_dir()}
+        if EXPECTED_SUBFOLDERS.intersection(subfolders):
+            has_expected_subfolder = True
+            break
+
+    if not has_expected_subfolder:
+        raise FileNotFoundError(
+            "CASIA family folders were found, but no 1L/1R/2L/2R subfolders were found.\n"
+            f"Given path: {raw_root}\n"
+            "Check whether the dataset is nested one level deeper and pass that inner folder."
+        )
+
+    return raw_root
+
+
+def re_fullmatch_two_digits(value: str) -> bool:
+    return len(value) == 2 and value.isdigit()
+
+
 def run_step(
     name: str,
     command: list[str],
@@ -71,10 +117,8 @@ def run_step(
     print(f"[{name}]")
     print(" ".join(command))
     print("=" * 80)
-
     if dry_run:
         return
-
     subprocess.run(command, cwd=str(cwd), check=True)
 
 
@@ -87,7 +131,6 @@ def selected_steps(
 
     if start_at is not None and start_at not in names:
         raise ValueError(f"Unknown --start-at stage: {start_at}\nAvailable: {names}")
-
     if stop_after is not None and stop_after not in names:
         raise ValueError(f"Unknown --stop-after stage: {stop_after}\nAvailable: {names}")
 
@@ -104,31 +147,9 @@ def main() -> None:
     args = parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
-    project_name = repo_root.name
-
-    # Older scripts use "iris_twins_project/data/..." as a relative path.
-    # Running from the parent directory and optionally creating a local alias
-    # makes those scripts work even if the repo is cloned as "Casia_Iris_Twins".
-    run_cwd = repo_root.parent
-    legacy_alias = run_cwd / "iris_twins_project"
-
-    if legacy_alias != repo_root and not legacy_alias.exists():
-        try:
-            legacy_alias.symlink_to(repo_root, target_is_directory=True)
-            print(f"Created compatibility symlink: {legacy_alias} -> {repo_root}")
-        except OSError:
-            print(
-                "WARNING: could not create the compatibility symlink "
-                f"{legacy_alias} -> {repo_root}.\n"
-                "Some older scripts expect the repository to be named "
-                "'iris_twins_project'. If a script fails, clone or rename the "
-                "repository folder as 'iris_twins_project'."
-            )
-
-    if not args.raw_root.exists():
-        raise FileNotFoundError(f"Raw dataset not found: {args.raw_root}")
-
     script_dir = repo_root / "scripts"
+    run_cwd = repo_root
+    raw_root = validate_dataset_root(args.raw_root)
     py = args.python
 
     steps: list[tuple[str, list[str]]] = [
@@ -138,22 +159,68 @@ def main() -> None:
                 py,
                 str(script_dir / "build_metadata.py"),
                 "--root",
-                str(args.raw_root),
+                str(raw_root),
                 "--output",
-                "iris_twins_project/data/metadata",
+                "data/metadata",
             ],
         ),
         ("check_duplicates", [py, str(script_dir / "check_duplicates.py")]),
         ("create_clean_metadata", [py, str(script_dir / "create_clean_metadata.py")]),
         ("build_pairs", [py, str(script_dir / "build_pairs.py")]),
-        ("quality_audit", [py, str(script_dir / "quality_audit.py")]),
-        ("inspect_quality_outliers", [py, str(script_dir / "inspect_quality_outliers.py")]),
+        (
+            "quality_audit",
+            [
+                py,
+                str(script_dir / "quality_audit.py"),
+                "--dataset-root",
+                str(raw_root),
+            ],
+        ),
+        (
+            "inspect_quality_outliers",
+            [
+                py,
+                str(script_dir / "inspect_quality_outliers.py"),
+                "--dataset-root",
+                str(raw_root),
+            ],
+        ),
         ("create_final_metadata", [py, str(script_dir / "create_final_metadata.py")]),
-        ("segmentation_daugman_style", [py, str(script_dir / "segmentation_daugman_style.py")]),
+        (
+            "segmentation_daugman_style",
+            [
+                py,
+                str(script_dir / "segmentation_daugman_style.py"),
+                "--dataset-root",
+                str(raw_root),
+            ],
+        ),
         ("filter_daugman_strict", [py, str(script_dir / "filter_daugman_strict.py")]),
         ("audit_strict_metadata", [py, str(script_dir / "audit_strict_metadata.py")]),
-        ("create_strict_subsets", [py, str(script_dir / "create_strict_subsets.py")]),
-        ("normalize_daugman_strict_v3", [py, str(script_dir / "normalize_daugman_strict_v3.py")]),
+        (
+            "create_strict_subsets",
+            [
+                py,
+                str(script_dir / "create_strict_subsets.py"),
+                "--input",
+                "data/metadata/metadata_daugman_strict.csv",
+                "--output-min2",
+                "data/metadata/metadata_daugman_strict_min2.csv",
+                "--output-complete",
+                "data/metadata/metadata_daugman_strict_complete_families.csv",
+                "--output-summary",
+                "data/metadata/strict_subsets_summary.txt",
+            ],
+        ),
+        (
+            "normalize_daugman_strict_v3",
+            [
+                py,
+                str(script_dir / "normalize_daugman_strict_v3.py"),
+                "--dataset-root",
+                str(raw_root),
+            ],
+        ),
         ("extract_gabor_features", [py, str(script_dir / "extract_gabor_features.py")]),
         (
             "build_feature_pairs",
@@ -195,9 +262,9 @@ def main() -> None:
     steps_to_run = selected_steps(steps, args.start_at, args.stop_after)
 
     print(f"Repository root: {repo_root}")
-    print(f"Repository folder name: {project_name}")
+    print(f"Repository folder name: {repo_root.name}")
     print(f"Execution cwd: {run_cwd}")
-    print(f"Raw dataset: {args.raw_root}")
+    print(f"Raw dataset: {raw_root}")
     print(f"Number of stages: {len(steps_to_run)}")
 
     for name, command in steps_to_run:
