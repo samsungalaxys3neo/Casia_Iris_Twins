@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DEMO ORALE - STRICT SAMPLE - V3 ROBUSTA
+STRICT SAMPLE DEMO - V3 ROBUSTA
 
 Fix principale rispetto alle versioni precedenti:
 - la selezione del sample viene fatta SOLO tra immagini strict che hanno un overlay
@@ -41,7 +41,7 @@ EYE_FOLDERS = {"1L", "1R", "2L", "2R"}
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Build a robust oral demo from strict final outputs.")
+    p = argparse.ArgumentParser(description="Build a robust interactive demo from strict final outputs.")
     p.add_argument("--repo-root", type=Path, default=DEFAULT_REPO_ROOT)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--families", type=int, default=2)
@@ -709,13 +709,13 @@ def write_report(out_dir: Path, selected: pd.DataFrame, artifact_log: pd.DataFra
     missing = artifact_log[artifact_log["found"] == False] if not artifact_log.empty else pd.DataFrame()
     missing_txt = missing[["kind", "filename", "stem"]].to_string(index=False) if not missing.empty else "No missing artifacts."
 
-    text = f"""# Demo orale strict sample v3
+    text = f"""# Strict sample demo v3
 
-Questa demo seleziona solo immagini della subset strict che hanno un overlay di segmentazione corrispondente.
+This demo selects only strict-subset images that have a matching segmentation overlay.
 
-## Sample selezionato
+## Selected sample
 
-Numero immagini: **{len(selected)}**
+Number of images: **{len(selected)}**
 
 ```text
 {selected_txt}
@@ -727,7 +727,7 @@ Numero immagini: **{len(selected)}**
 {matching_source}
 ```
 
-## Immagini da mostrare
+## Reference images
 
 ```bash
 open demo_orale_strict_sample_v3/reference_images/01_raw_selected.png
@@ -738,7 +738,7 @@ open demo_orale_strict_sample_v3/reference_images/05_masked_normalized_strips.pn
 open demo_orale_strict_sample_v3/reference_images/06_gabor_codes.png
 ```
 
-## Pair counts del sample
+## Sample pair counts
 
 ```text
 {pair_counts_txt}
@@ -750,13 +750,13 @@ open demo_orale_strict_sample_v3/reference_images/06_gabor_codes.png
 {stats_txt}
 ```
 
-## Verification metrics del sample
+## Sample verification metrics
 
 ```json
 {json.dumps(metrics, indent=2)}
 ```
 
-## Plot del sample
+## Sample plots
 
 ```bash
 open demo_orale_strict_sample_v3/plots/sample_pair_counts.png
@@ -768,13 +768,13 @@ open demo_orale_strict_sample_v3/plots/sample_roc_curve.png
 open demo_orale_strict_sample_v3/plots/sample_det_curve.png
 ```
 
-## Artifact mancanti
+## Missing artifacts
 
 ```text
 {missing_txt}
 ```
 
-## Frase pronta
+## Suggested explanation
 
 > For this demo, we randomly select a small subset of images from the final Daugman-style strict subset, but only among samples for which the true final segmentation overlay is available. Then we retrieve the corresponding normalized strips, masks, masked strips and feature codes. Finally, we compute or retrieve Hamming Distance scores for the selected samples and generate sample-specific plots. These plots are only used to demonstrate the pipeline behavior; the official quantitative results are those reported in the paper.
 """
@@ -817,7 +817,7 @@ def main() -> None:
     strict_metadata = repo_root / "data/metadata/metadata_daugman_strict.csv"
     overlay_files = artifact_files_for_kind(repo_root, "segmentation")
 
-    print("\n=== DEMO ORALE STRICT SAMPLE V3 ===")
+    print("\n=== STRICT SAMPLE DEMO V3 ===")
     print(f"Repo root:        {repo_root}")
     print(f"Strict metadata:  {strict_metadata}")
     print(f"Overlay files:    {len(overlay_files)}")
