@@ -1,0 +1,38 @@
+{
+  "seed": 1234,
+  "families": 20,
+  "images_per_iris": 5,
+  "selected_images": 192,
+  "selected_families": [
+    "0",
+    "1",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9"
+  ],
+  "strict_rows_total": 1465,
+  "rows_with_true_overlay": 250,
+  "sample_pairs": 18336,
+  "sample_matching_rows": 1875,
+  "metrics": {
+    "genuine_pairs": 290,
+    "impostor_pairs": 1585,
+    "EER": 0.08270423148047427,
+    "EER_threshold": 0.4037403740374037,
+    "AUC": 0.9775089742195149
+  }
+}
